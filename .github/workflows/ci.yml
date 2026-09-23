@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # macOS only, and required.
+  #
+  # openit is a macOS tool end to end: /usr/bin/open, xattr, mdfind, plutil, Contents/MacOS.
+  # A Linux job would skip the entire risk layer and still go green, which is the one failure
+  # mode this project cannot have.
+  gates:
+    strategy:
+      matrix:
+        node: [20, 22, 24]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+      # The shipped bundle is committed, so a build that changes it must be committed too.
+      - run: git diff --exit-code -- dist/openit.js
