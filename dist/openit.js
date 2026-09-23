@@ -506,6 +506,72 @@ var validTemplate = (template) => template.command.startsWith("/") && template.a
 // src/match/literal.ts
 import { existsSync as existsSync4, statSync as statSync3 } from "node:fs";
 
+// src/risk/scheme.ts
+var FORBIDDEN = /* @__PURE__ */ new Set(["javascript", "data", "vbscript", "about", "blob", "view-source"]);
+var WEB = /* @__PURE__ */ new Set(["http", "https"]);
+var MESSAGE = /* @__PURE__ */ new Set(["mailto", "tel", "sms", "facetime", "facetime-audio", "imessage"]);
+var APPLE = /* @__PURE__ */ new Set(["macappstore", "macappstores", "itms", "itmss", "itms-apps", "prefs"]);
+var APPLE_PREFIX = "x-apple-";
+var classifyScheme = (scheme2) => {
+  const lower = scheme2.toLowerCase().replace(/:$/u, "");
+  if (FORBIDDEN.has(lower)) return "forbidden";
+  if (WEB.has(lower)) return "web";
+  if (lower === "file") return "file";
+  if (MESSAGE.has(lower)) return "message";
+  if (APPLE.has(lower) || lower.startsWith(APPLE_PREFIX)) return "apple";
+  return "custom";
+};
+var parseUrl = (text) => {
+  if (/[\r\n]/u.test(text)) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  const scheme2 = url.protocol.replace(/:$/u, "").toLowerCase();
+  return {
+    url,
+    scheme: scheme2,
+    klass: classifyScheme(scheme2),
+    hasUserInfo: url.username !== "" || url.password !== ""
+  };
+};
+var urlShape = (url) => {
+  const first = url.pathname.split("/").filter((part) => part !== "")[0] ?? "";
+  return { site: url.hostname, route: first === "" ? "/" : `/${first}` };
+};
+
+// src/match/literal.ts
+var mtimeOf = (path) => {
+  try {
+    return statSync3(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+var nameOf = (path) => path.split("/").filter((p) => p !== "").at(-1) ?? path;
+var pathTarget = (path) => ({
+  kind: statSync3(path).isDirectory() ? /\.app$/iu.test(path) ? "app" : "dir" : "file",
+  ref: path,
+  name: nameOf(path),
+  mtime: mtimeOf(path),
+  source: "literal"
+});
+var SPELLED_URL = /^[a-z][a-z0-9+.-]+:.+$/iu;
+var literalTarget = (args) => {
+  if (args.length !== 1) return null;
+  const word = args[0];
+  if (word === void 0 || word === "") return null;
+  const spelled = spelledPath(word);
+  if (spelled !== null && existsSync4(spelled)) return pathTarget(spelled);
+  if (!SPELLED_URL.test(word) || parseUrl(word) === null) return null;
+  return { kind: "url", ref: word, name: word, mtime: 0, source: "literal" };
+};
+
+// src/store/links.ts
+import { existsSync as existsSync7 } from "node:fs";
+
 // node_modules/@franzenzenhofer/intent-core/dist/match/url.js
 var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/u;
 var TLDS = /* @__PURE__ */ new Set([
@@ -655,12 +721,12 @@ var pathReading = (tokens) => {
   return spelled ? { tokens: read, within: within2 } : null;
 };
 var urlReadings = (tokens) => {
-  const names = tokens.map(urlNames);
-  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list4) => list4.length)));
+  const names2 = tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names2.map((list4) => list4.length)));
   const readings2 = [];
   for (let level = 0; level < depth; level += 1) {
     const read = tokens.map((token, index2) => {
-      const list4 = names[index2] ?? [];
+      const list4 = names2[index2] ?? [];
       return list4[Math.min(level, list4.length - 1)] ?? token;
     });
     const known2 = [tokens, ...readings2];
@@ -670,35 +736,6 @@ var urlReadings = (tokens) => {
   }
   return readings2;
 };
-
-// src/match/literal.ts
-var mtimeOf = (path) => {
-  try {
-    return statSync3(path).mtimeMs;
-  } catch {
-    return 0;
-  }
-};
-var nameOf = (path) => path.split("/").filter((p) => p !== "").at(-1) ?? path;
-var pathTarget = (path) => ({
-  kind: statSync3(path).isDirectory() ? /\.app$/iu.test(path) ? "app" : "dir" : "file",
-  ref: path,
-  name: nameOf(path),
-  mtime: mtimeOf(path),
-  source: "literal"
-});
-var literalTarget = (args) => {
-  if (args.length !== 1) return null;
-  const word = args[0];
-  if (word === void 0 || word === "") return null;
-  const spelled = spelledPath(word);
-  if (spelled !== null && existsSync4(spelled)) return pathTarget(spelled);
-  if (!URL_SCHEME.test(word)) return null;
-  return { kind: "url", ref: word, name: word, mtime: 0, source: "literal" };
-};
-
-// src/store/links.ts
-import { existsSync as existsSync7 } from "node:fs";
 
 // src/match/constants.ts
 var SCORE = {
@@ -817,6 +854,10 @@ var within = (ranges, codePoint) => ranges.some(([low, high]) => codePoint >= lo
 var lies = (codePoint) => within(LYING, codePoint);
 var controls = (codePoint) => within(CONTROLS, codePoint);
 var ELLIPSIS = "\u2026";
+var isHonest = (text) => ![...text].some((char) => {
+  const point = char.codePointAt(0) ?? 0;
+  return lies(point) || controls(point);
+});
 var sanitizeLabel = (text, max) => {
   const kept = [...text.normalize("NFC")].flatMap((char) => {
     const point = char.codePointAt(0) ?? 0;
@@ -826,42 +867,6 @@ var sanitizeLabel = (text, max) => {
   const flattened = kept.replace(/\s+/gu, " ").trim();
   const graphemes = [...flattened];
   return graphemes.length <= max ? flattened : `${graphemes.slice(0, max - 1).join("")}${ELLIPSIS}`;
-};
-
-// src/risk/scheme.ts
-var FORBIDDEN = /* @__PURE__ */ new Set(["javascript", "data", "vbscript", "about", "blob", "view-source"]);
-var WEB = /* @__PURE__ */ new Set(["http", "https"]);
-var MESSAGE = /* @__PURE__ */ new Set(["mailto", "tel", "sms", "facetime", "facetime-audio", "imessage"]);
-var APPLE = /* @__PURE__ */ new Set(["macappstore", "macappstores", "itms", "itmss", "itms-apps", "prefs"]);
-var APPLE_PREFIX = "x-apple-";
-var classifyScheme = (scheme2) => {
-  const lower = scheme2.toLowerCase().replace(/:$/u, "");
-  if (FORBIDDEN.has(lower)) return "forbidden";
-  if (WEB.has(lower)) return "web";
-  if (lower === "file") return "file";
-  if (MESSAGE.has(lower)) return "message";
-  if (APPLE.has(lower) || lower.startsWith(APPLE_PREFIX)) return "apple";
-  return "custom";
-};
-var parseUrl = (text) => {
-  if (/[\r\n]/u.test(text)) return null;
-  let url;
-  try {
-    url = new URL(text);
-  } catch {
-    return null;
-  }
-  const scheme2 = url.protocol.replace(/:$/u, "").toLowerCase();
-  return {
-    url,
-    scheme: scheme2,
-    klass: classifyScheme(scheme2),
-    hasUserInfo: url.username !== "" || url.password !== ""
-  };
-};
-var urlShape = (url) => {
-  const first = url.pathname.split("/").filter((part) => part !== "")[0] ?? "";
-  return { site: url.hostname, route: first === "" ? "/" : `/${first}` };
 };
 
 // src/store/bookmarks.ts
@@ -893,13 +898,13 @@ var browserProfiles = (base = supportDir()) => {
   for (const [browser, segments2] of BROWSER_DIRS) {
     const root = join3(base, ...segments2);
     if (!isDir(root)) continue;
-    let names = [];
+    let names2 = [];
     try {
-      names = readdirSync2(root);
+      names2 = readdirSync2(root);
     } catch {
       continue;
     }
-    for (const name of names) {
+    for (const name of names2) {
       const dir = join3(root, name);
       if (existsSync5(join3(dir, "Bookmarks")) || existsSync5(join3(dir, "History"))) {
         found.push({ browser, profile: name, dir });
@@ -1715,10 +1720,10 @@ var classifyPath = (path, roots) => {
 import { basename as basename3 } from "node:path";
 var commandName = (rule) => basename3(rule.command);
 var ruleNames = (rule) => {
-  const names = [commandName(rule), rule.app].filter((name) => name !== "");
-  if (rule.ext !== "" && rule.ext !== "*") names.push(rule.ext);
-  if (rule.kind !== "") names.push(rule.kind);
-  return names;
+  const names2 = [commandName(rule), rule.app].filter((name) => name !== "");
+  if (rule.ext !== "" && rule.ext !== "*") names2.push(rule.ext);
+  if (rule.kind !== "") names2.push(rule.kind);
+  return names2;
 };
 var templateFor = (rule) => {
   if (rule.command === "") return null;
@@ -2005,14 +2010,14 @@ var isApp = (path) => {
   }
 };
 var appsIn = (dir) => {
-  let names;
+  let names2;
   try {
-    names = readdirSync3(dir);
+    names2 = readdirSync3(dir);
   } catch {
     return [];
   }
-  const direct = names.filter((name) => name.endsWith(".app")).map((name) => join6(dir, name));
-  const nested = names.filter((name) => !name.endsWith(".app") && !name.startsWith(".")).flatMap((name) => {
+  const direct = names2.filter((name) => name.endsWith(".app")).map((name) => join6(dir, name));
+  const nested = names2.filter((name) => !name.endsWith(".app") && !name.startsWith(".")).flatMap((name) => {
     const sub = join6(dir, name);
     try {
       return readdirSync3(sub).filter((n) => n.endsWith(".app")).map((n) => join6(sub, n));
@@ -2508,28 +2513,28 @@ var rank = (items, evaluate, tieBreak) => {
   }
   return scored.sort((a, b) => b.quality - a.quality || b.score - a.score || tieBreak(a.item, b.item));
 };
-var decide = (ranked, thresholds) => {
-  const best = ranked[0];
+var decide = (ranked2, thresholds) => {
+  const best = ranked2[0];
   if (best === void 0)
     return { kind: "unsure", candidates: [] };
-  const runnerUp = ranked[1];
+  const runnerUp = ranked2[1];
   const gap = best.quality === (runnerUp?.quality ?? 0) ? best.score - (runnerUp?.score ?? 0) : best.quality - (runnerUp?.quality ?? 0);
   if (best.quality >= thresholds.hit && gap >= thresholds.gap) {
     return { kind: "hit", item: best.item, score: best.score };
   }
-  const shortlist = ranked.filter((scored) => scored.quality >= thresholds.candidate).slice(0, thresholds.picker);
+  const shortlist = ranked2.filter((scored) => scored.quality >= thresholds.candidate).slice(0, thresholds.picker);
   if (shortlist.length >= thresholds.minPickerCandidates) {
     return { kind: "choose", candidates: shortlist };
   }
   if (shortlist.length === 1 && best.quality >= thresholds.hit) {
     return { kind: "hit", item: best.item, score: best.score };
   }
-  return { kind: "unsure", candidates: ranked.slice(0, thresholds.unsure) };
+  return { kind: "unsure", candidates: ranked2.slice(0, thresholds.unsure) };
 };
-var collapseChains = (ranked, pathOf2) => {
+var collapseChains = (ranked2, pathOf2) => {
   const kept = [];
   const paths = new PathChainSet();
-  for (const scored of ranked) {
+  for (const scored of ranked2) {
     const path = pathOf2(scored.item);
     if (paths.hasChain(path))
       continue;
@@ -2542,9 +2547,9 @@ var parentOf = (path) => {
   const idx = path.lastIndexOf("/");
   return idx <= 0 ? "" : path.slice(0, idx);
 };
-var dropDescendants = (ranked, pathOf2) => {
-  const paths = new Set(ranked.map((scored) => pathOf2(scored.item)));
-  return ranked.filter((scored) => {
+var dropDescendants = (ranked2, pathOf2) => {
+  const paths = new Set(ranked2.map((scored) => pathOf2(scored.item)));
+  return ranked2.filter((scored) => {
     let parent = parentOf(pathOf2(scored.item));
     while (parent.length > 1) {
       if (paths.has(parent))
@@ -2565,8 +2570,8 @@ var parentPath = (path) => {
   return idx <= 0 ? "" : path.slice(0, idx);
 };
 var nameScoreOf = (token, target) => {
-  const names = target.aka === void 0 ? [target.name] : [target.name, ...target.aka];
-  return Math.max(...names.map((name) => matchName(token, name, MATCH)));
+  const names2 = target.aka === void 0 ? [target.name] : [target.name, ...target.aka];
+  return Math.max(...names2.map((name) => matchName(token, name, MATCH)));
 };
 var tokenScore = (token, target) => {
   const nameScore = nameScoreOf(token, target);
@@ -2630,7 +2635,7 @@ var looseTargets = (query2, targets) => targets.map((target) => ({ target, score
 // src/match/resolve.ts
 var pathOf = (target) => target.ref;
 var rankTargets = (query2, targets, context) => {
-  const ranked = rank(
+  const ranked2 = rank(
     targets,
     (target) => {
       const quality = matchQuality(query2, target);
@@ -2639,21 +2644,21 @@ var rankTargets = (query2, targets, context) => {
     },
     (a, b) => a.ref.localeCompare(b.ref)
   );
-  return collapseChains(ranked, pathOf);
+  return collapseChains(ranked2, pathOf);
 };
-var applyOrder = (query2, ranked) => {
-  const best = ranked[0];
+var applyOrder = (query2, ranked2) => {
+  const best = ranked2[0];
   if (best === void 0) return { kind: "unsure", candidates: [] };
-  if (best.quality < ORDERED_HIT) return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiTargets) };
+  if (best.quality < ORDERED_HIT) return { kind: "unsure", candidates: ranked2.slice(0, LIMIT.aiTargets) };
   const pool = dropDescendants(
-    ranked.filter((scored) => scored.quality >= best.quality - THRESHOLD.gap),
+    ranked2.filter((scored) => scored.quality >= best.quality - THRESHOLD.gap),
     pathOf
   );
   const newest = query2.order === "latest";
   const chosen = [...pool].sort((a, b) => newest ? b.item.mtime - a.item.mtime : a.item.mtime - b.item.mtime)[0];
-  return chosen === void 0 ? { kind: "unsure", candidates: ranked } : { kind: "hit", item: chosen.item, score: chosen.score };
+  return chosen === void 0 ? { kind: "unsure", candidates: ranked2 } : { kind: "hit", item: chosen.item, score: chosen.score };
 };
-var decideTargets = (query2, ranked) => query2.order === "none" ? decide(ranked, THRESHOLD) : applyOrder(query2, ranked);
+var decideTargets = (query2, ranked2) => query2.order === "none" ? decide(ranked2, THRESHOLD) : applyOrder(query2, ranked2);
 
 // src/store/spotlight.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
@@ -2685,13 +2690,13 @@ var runMdfind = (args, timeoutMs) => {
   return result.stdout;
 };
 var probeRoot = (root) => {
-  let names;
+  let names2;
   try {
-    names = readdirSync7(root);
+    names2 = readdirSync7(root);
   } catch {
     return false;
   }
-  const candidates = names.filter((name) => !name.startsWith(".") && !/[\p{Cc}]/u.test(name)).slice(0, PROBE_NAMES);
+  const candidates = names2.filter((name) => !name.startsWith(".") && !/[\p{Cc}]/u.test(name)).slice(0, PROBE_NAMES);
   return candidates.some((name) => {
     const out = runMdfind(
       ["-onlyin", root, "-count", `kMDItemFSName == "${quoteQueryValue(name)}"`],
@@ -2795,9 +2800,9 @@ var freshIndex = (config) => {
 var bestReading = (query2, targets, context) => {
   let fallback = { ranked: [], query: query2 };
   for (const reading of readings(query2)) {
-    const ranked = rankTargets(reading, targets, context);
-    if (ranked.length > 0) return { ranked, query: reading };
-    if (fallback.ranked.length === 0) fallback = { ranked, query: reading };
+    const ranked2 = rankTargets(reading, targets, context);
+    if (ranked2.length > 0) return { ranked: ranked2, query: reading };
+    if (fallback.ranked.length === 0) fallback = { ranked: ranked2, query: reading };
   }
   return fallback;
 };
@@ -3958,11 +3963,11 @@ var resolve4 = async (query2, config, context) => {
 var understand = (args, config, options) => {
   const parsed = tokenizeArgs(args);
   const apps = tier1(config, { version: 0, generatedAt: 0, configKey: "", truncated: null, entries: [] }).apps;
-  const names = rootNames(config);
+  const names2 = rootNames(config);
   const withWord = options.withWord ?? parsed.withWord;
   const query2 = resolveIn(
     { ...parsed, withWord, handlerWord: withWord, handlerExplicit: withWord !== null },
-    (word) => names.has(word) || existsSync15(word),
+    (word) => names2.has(word) || existsSync15(word),
     (word) => apps.apps.some((app) => app.name.toLowerCase().startsWith(word))
   );
   const handler = resolveHandler({ query: query2, apps: apps.apps, rules: config.handlers });
@@ -4030,13 +4035,13 @@ var isDir2 = (path) => {
   }
 };
 var cloudDirs = (home) => {
-  let names = [];
+  let names2 = [];
   try {
-    names = readdirSync8(home);
+    names2 = readdirSync8(home);
   } catch {
     return [];
   }
-  const matched = names.filter((name) => !name.startsWith(".") && CLOUD_PATTERN.test(name)).map((name) => join11(home, name));
+  const matched = names2.filter((name) => !name.startsWith(".") && CLOUD_PATTERN.test(name)).map((name) => join11(home, name));
   return [...matched, ...CLOUD_PATHS.map((name) => join11(home, name))].filter(isDir2);
 };
 var detectRoots = () => {
@@ -4420,10 +4425,94 @@ var runHandler = (args) => {
   return fail(`unknown handler command "${sanitizeLabel(command, 40)}"`, USAGE3), EXIT.error;
 };
 
+// src/commands/complete.ts
+var SUBCOMMANDS = [
+  "plan",
+  "which",
+  "setup",
+  "doctor",
+  "index",
+  "link",
+  "alias",
+  "handler",
+  "init",
+  "complete"
+];
+var OPTIONS = ["--with", "--reveal", "--new", "--background", "--wait", "--dry-run", "--version"];
+var usable2 = (name) => name !== "" && isHonest(name) && !name.includes("\n");
+var names = () => {
+  const config = loadConfig();
+  const sources = tier1(config, freshIndex(config));
+  return [
+    ...loadTaught().map((link) => link.name),
+    ...memories().map((alias) => alias.query),
+    ...sources.targets.map((target) => target.name)
+  ].filter(usable2);
+};
+var ranked = (word, all) => {
+  const seen = /* @__PURE__ */ new Set();
+  return all.map((name) => ({ name, score: matchName(word, name, MATCH) })).filter((one) => one.score > SCORE.none).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).filter((one) => {
+    const key = one.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, LIMIT.picker).map((one) => one.name);
+};
+var completeQuery = (args) => {
+  const words2 = args[0] === "--" ? args.slice(1) : [...args];
+  const word = (words2.at(-1) ?? "").toLowerCase();
+  if (word.startsWith("-")) return OPTIONS.filter((option) => option.startsWith(word));
+  const subcommands = words2.length <= 1 ? SUBCOMMANDS.filter((command) => command.startsWith(word)) : [];
+  if (word === "") return subcommands;
+  return [...subcommands, ...ranked(word, names())];
+};
+var runComplete = (args) => {
+  for (const completion of completeQuery(args)) emit(completion);
+  return EXIT.ok;
+};
+
+// src/shell/zsh.ts
+var ZSH_INIT = `_openit() {
+  local -a completions
+  completions=("\${(@f)$(openit complete -- "\${words[2,CURRENT]}" 2>/dev/null)}")
+  compadd -- "\${completions[@]}"
+}
+compdef _openit openit`;
+
+// src/shell/bash.ts
+var BASH_INIT = `_openit() {
+  local IFS=$'\\n'
+  COMPREPLY=($(openit complete -- "\${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+}
+complete -o default -F _openit openit`;
+
+// src/shell/fish.ts
+var FISH_INIT = `function __openit_complete
+  set -l words (commandline -opc) (commandline -ct)
+  openit complete -- $words[2..-1] 2>/dev/null
+end
+complete -c openit -f -a '(__openit_complete)'`;
+
+// src/commands/init.ts
+var USAGE4 = "usage: openit init <zsh|bash|fish>";
+var BY_SHELL = /* @__PURE__ */ new Map([
+  ["zsh", ZSH_INIT],
+  ["bash", BASH_INIT],
+  ["fish", FISH_INIT]
+]);
+var runInit = (args) => {
+  const shell = args[0];
+  if (shell === void 0) return fail("which shell?", USAGE4), EXIT.error;
+  const script = BY_SHELL.get(shell);
+  if (script === void 0) return fail(`openit knows zsh, bash and fish, not "${shell}"`, USAGE4), EXIT.error;
+  emit(script);
+  return EXIT.ok;
+};
+
 // src/cli.ts
 setProduct({ name: "openit", envPrefix: "OPENIT" });
 var VERSION4 = `openit ${package_default.version}`;
-var USAGE4 = `openit - say what to open, it works out what and with what, then opens it
+var USAGE5 = `openit - say what to open, it works out what and with what, then opens it
 
 openit <words>                open the thing you mean
 openit --with <app> <words>   name the handler yourself
@@ -4439,6 +4528,7 @@ openit link list | forget <name>
 openit alias list | add <thing> -- <words> | forget -- <words>
 openit handler set --kind pdf --app Preview
 openit handler list | forget --kind pdf
+openit init zsh|bash|fish     completion wiring for your shell
 openit doctor                 show what openit sees on this machine
 openit --version
 
@@ -4450,13 +4540,13 @@ var queryArgs = (args) => {
 };
 var run = async (args, mode) => {
   const parsed = parseArgs(args);
-  if (parsed.error !== null) return fail(parsed.error, USAGE4.split("\n")[2] ?? ""), EXIT.error;
+  if (parsed.error !== null) return fail(parsed.error, USAGE5.split("\n")[2] ?? ""), EXIT.error;
   return runQuery(parsed.words, { ...parsed.options, mode: mode === "run" ? parsed.options.mode : mode });
 };
 var dispatch = async (args) => {
   const command = args[0];
   if (command === void 0 || command === "--help" || command === "-h") {
-    note(USAGE4);
+    note(USAGE5);
     return command === void 0 ? EXIT.error : EXIT.ok;
   }
   if (command === "--version" || command === "-v") {
@@ -4469,6 +4559,8 @@ var dispatch = async (args) => {
   if (command === "link") return runLink(args.slice(1));
   if (command === "alias") return runAlias(args.slice(1));
   if (command === "handler") return runHandler(args.slice(1));
+  if (command === "complete") return runComplete(args.slice(1));
+  if (command === "init") return runInit(args.slice(1));
   if (command === "plan") return run(queryArgs(args), "json");
   if (command === "which") return run(queryArgs(args), "which");
   return run(args, "run");

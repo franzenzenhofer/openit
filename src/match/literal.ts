@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { spelledPath } from '@franzenzenhofer/intent-core/paths';
-import { URL_SCHEME } from '@franzenzenhofer/intent-core/match/url';
+import { parseUrl } from '../risk/scheme.js';
 import type { Target } from '../target.js';
 
 const mtimeOf = (path: string): number => {
@@ -22,6 +22,14 @@ const pathTarget = (path: string): Target => ({
 });
 
 /**
+ * A scheme and something after it. Deliberately not "scheme://": `mailto:`, `tel:` and
+ * `javascript:` have no authority component, and a tool that only recognised the double slash
+ * would answer "no match" for a javascript: link instead of refusing it - which is the whole
+ * difference between saying nothing was found and saying no.
+ */
+const SPELLED_URL = /^[a-z][a-z0-9+.-]+:.+$/iu;
+
+/**
  * Tier 0. A thing the user spelled out is not a search: it is the answer. A path that exists,
  * a file:// URL, or any other URL, all name exactly one thing and nothing else can outrank it.
  */
@@ -31,6 +39,6 @@ export const literalTarget = (args: readonly string[]): Target | null => {
   if (word === undefined || word === '') return null;
   const spelled = spelledPath(word);
   if (spelled !== null && existsSync(spelled)) return pathTarget(spelled);
-  if (!URL_SCHEME.test(word)) return null;
+  if (!SPELLED_URL.test(word) || parseUrl(word) === null) return null;
   return { kind: 'url', ref: word, name: word, mtime: 0, source: 'literal' };
 };

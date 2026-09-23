@@ -11,6 +11,8 @@ import { runIndex } from './commands/index-cmd.js';
 import { runLink } from './commands/link.js';
 import { runAlias } from './commands/alias.js';
 import { runHandler } from './commands/handler.js';
+import { runComplete } from './commands/complete.js';
+import { runInit } from './commands/init.js';
 
 setProduct({ name: 'openit', envPrefix: 'OPENIT' });
 
@@ -32,6 +34,7 @@ openit link list | forget <name>
 openit alias list | add <thing> -- <words> | forget -- <words>
 openit handler set --kind pdf --app Preview
 openit handler list | forget --kind pdf
+openit init zsh|bash|fish     completion wiring for your shell
 openit doctor                 show what openit sees on this machine
 openit --version
 
@@ -65,6 +68,8 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   if (command === 'link') return runLink(args.slice(1));
   if (command === 'alias') return runAlias(args.slice(1));
   if (command === 'handler') return runHandler(args.slice(1));
+  if (command === 'complete') return runComplete(args.slice(1));
+  if (command === 'init') return runInit(args.slice(1));
   if (command === 'plan') return run(queryArgs(args), 'json');
   if (command === 'which') return run(queryArgs(args), 'which');
   return run(args, 'run');
