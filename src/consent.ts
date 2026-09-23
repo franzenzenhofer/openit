@@ -17,7 +17,8 @@ const describe = (assessed: Assessed, plan: Plan): void => {
   if (assessed.quarantine !== null) {
     const when = assessed.quarantine.at === null
       ? '' : ` on ${new Date(assessed.quarantine.at * 1000).toISOString().slice(0, 10)}`;
-    line(`downloaded with ${assessed.quarantine.agent || 'an unknown app'}${when}`);
+    const how = assessed.quarantine.downloaded ? 'downloaded with' : 'written by';
+    line(`${how} ${assessed.quarantine.agent || 'an unknown app'}${when}`);
   }
   if (assessed.facts?.escapesRoots === true && assessed.facts.isSymlink) {
     line(`it is a link to ${assessed.facts.realPath}`);

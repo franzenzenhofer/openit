@@ -161,7 +161,7 @@ var hasPrivateMode = (path, directory) => {
 // package.json
 var package_default = {
   name: "openit",
-  version: "0.1.2",
+  version: "0.1.3",
   description: "Say what to open. It works out what you meant and which app should open it, then opens it.",
   type: "module",
   bin: {
@@ -2671,7 +2671,19 @@ var applyOrder = (query2, ranked2) => {
   const chosen = [...pool].sort((a, b) => newest ? b.item.mtime - a.item.mtime : a.item.mtime - b.item.mtime)[0];
   return chosen === void 0 ? { kind: "unsure", candidates: ranked2 } : { kind: "hit", item: chosen.item, score: chosen.score };
 };
-var decideTargets = (query2, ranked2) => query2.order === "none" ? decide(ranked2, THRESHOLD) : applyOrder(query2, ranked2);
+var soleExactName = (query2, ranked2) => {
+  const exact = ranked2.filter((scored) => scored.quality >= SCORE.exact);
+  if (exact.length === 1) return exact[0] ?? null;
+  const apps = exact.filter((scored) => scored.item.kind === "app");
+  return query2.tokens.length === 1 && apps.length === 1 ? apps[0] ?? null : null;
+};
+var decideTargets = (query2, ranked2) => {
+  if (query2.order !== "none") return applyOrder(query2, ranked2);
+  const decision = decide(ranked2, THRESHOLD);
+  if (decision.kind === "hit") return decision;
+  const exact = soleExactName(query2, ranked2);
+  return exact === null ? decision : { kind: "hit", item: exact.item, score: exact.score };
+};
 
 // src/store/spotlight.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
@@ -3401,7 +3413,8 @@ var describe = (assessed, plan) => {
   if (assessed.redirect !== null) line(`it points at ${assessed.redirect.url.href}`);
   if (assessed.quarantine !== null) {
     const when = assessed.quarantine.at === null ? "" : ` on ${new Date(assessed.quarantine.at * 1e3).toISOString().slice(0, 10)}`;
-    line(`downloaded with ${assessed.quarantine.agent || "an unknown app"}${when}`);
+    const how = assessed.quarantine.downloaded ? "downloaded with" : "written by";
+    line(`${how} ${assessed.quarantine.agent || "an unknown app"}${when}`);
   }
   if (assessed.facts?.escapesRoots === true && assessed.facts.isSymlink) {
     line(`it is a link to ${assessed.facts.realPath}`);
@@ -3558,6 +3571,7 @@ var SCHEME_BASE = {
   // openit never emits `-u file://...`; reaching here at all means something went wrong.
   file: "refuse"
 };
+var isCuratedApp = (assessment) => assessment.curated && assessment.subject.kind === "path" && assessment.subject.klass === "application" && !assessment.quarantined && !assessment.external && assessment.origin !== "ai";
 var baseConsent = (assessment) => assessment.subject.kind === "path" ? CLASS_BASE[assessment.subject.klass] : SCHEME_BASE[assessment.subject.scheme];
 var runsCode = (subject) => subject.kind === "path" && !INERT.has(subject.klass);
 var contextual = (assessment, from) => {
@@ -3568,7 +3582,7 @@ var contextual = (assessment, from) => {
     if (runsCode(assessment.subject)) return "refuse";
     level = bump(level);
   }
-  if (assessment.escapesRoots) {
+  if (assessment.escapesRoots && !isCuratedApp(assessment)) {
     if (assessment.origin !== "literal" && index(from) >= index("verify")) return "refuse";
     level = bump(level);
   }
@@ -3584,7 +3598,7 @@ var byHandler = (assessment, from) => {
 };
 var requiredConsent = (assessment) => {
   if (assessment.subject.kind === "url" && assessment.subject.hasUserInfo) return "refuse";
-  const base = baseConsent(assessment);
+  const base = isCuratedApp(assessment) ? "allow" : baseConsent(assessment);
   if (base === "refuse") return "refuse";
   if (assessment.reveal && assessment.subject.kind === "path") return "allow";
   const level = byHandler(assessment, contextual(assessment, base));
@@ -3600,6 +3614,7 @@ var ATTRIBUTE = "com.apple.quarantine";
 var TIMEOUT_MS4 = 2e3;
 var MAX_BUFFER5 = 8192;
 var USER_APPROVED = 64;
+var DOWNLOADED = 1;
 var parseQuarantine = (raw) => {
   const trimmed = raw.trim();
   if (trimmed === "") return null;
@@ -3612,7 +3627,8 @@ var parseQuarantine = (raw) => {
     flags: flags3,
     agent: (agent ?? "").trim(),
     at: Number.isFinite(at) && at > 0 ? at : null,
-    userApproved: (flags3 & USER_APPROVED) !== 0
+    userApproved: (flags3 & USER_APPROVED) !== 0,
+    downloaded: (flags3 & DOWNLOADED) !== 0
   };
 };
 var readQuarantine = (path) => {
@@ -3631,6 +3647,7 @@ var kindOf = (handler) => {
   if (handler.kind !== "app") return "default";
   return handlerKind(handler.app.path, handler.app.bundleId);
 };
+var isCurated = (facts) => facts.klass === "application" && APP_DIRS().some((dir) => facts.realPath.startsWith(`${dir}/`));
 var urlSubject = (url) => ({ kind: "url", scheme: url.klass, hasUserInfo: url.hasUserInfo });
 var forUrl = (input, url) => {
   const assessment = {
@@ -3641,6 +3658,7 @@ var forUrl = (input, url) => {
     external: false,
     handler: kindOf(input.handler),
     handlerFromAi: input.handlerFromAi,
+    curated: false,
     reveal: false
   };
   return {
@@ -3653,6 +3671,17 @@ var forUrl = (input, url) => {
   };
 };
 var higher = (a, b) => consentRank(a) >= consentRank(b) ? a : b;
+var RUNS_CODE = /* @__PURE__ */ new Set([
+  "application",
+  "installer",
+  "bundle",
+  "executable",
+  "script"
+]);
+var isRisky = (quarantine2, klass) => {
+  if (quarantine2 === null || quarantine2.userApproved) return false;
+  return quarantine2.downloaded || RUNS_CODE.has(klass);
+};
 var followLocator = (input, base) => {
   const target = locatorUrl(input.target.ref);
   const redirect = target === null ? null : parseUrl(target);
@@ -3670,11 +3699,12 @@ var assess = (input) => {
   const assessment = {
     subject: { kind: "path", klass: facts.klass },
     origin: input.origin,
-    quarantined: quarantine2 !== null && !quarantine2.userApproved,
+    quarantined: isRisky(quarantine2, facts.klass),
     escapesRoots: facts.escapesRoots,
     external: facts.volume === "external",
     handler: kindOf(input.handler),
     handlerFromAi: input.handlerFromAi,
+    curated: isCurated(facts),
     reveal: input.reveal
   };
   const base = {
@@ -3790,9 +3820,11 @@ var line2 = (label, value) => {
 var flags2 = (assessed) => {
   const found = [];
   if (assessed.quarantine !== null) {
-    found.push(`quarantine: ${assessed.quarantine.agent || "unknown"}`);
+    const how = assessed.quarantine.downloaded ? "downloaded with" : "quarantine from";
+    found.push(`${how} ${assessed.quarantine.agent || "unknown"}`);
   }
-  if (assessed.facts?.escapesRoots === true) found.push("outside your roots");
+  if (assessed.assessment.curated) found.push("installed application");
+  else if (assessed.facts?.escapesRoots === true) found.push("outside your roots");
   if (assessed.facts?.volume === "external") found.push("external volume");
   if (assessed.redirect !== null) found.push(`points at ${assessed.redirect.url.href}`);
   return found;

@@ -47,8 +47,31 @@ const applyOrder = (query: ParsedQuery, ranked: readonly Scored<Target>[]): Targ
     : { kind: 'hit', item: chosen.item, score: chosen.score };
 };
 
+/**
+ * One thing is named exactly what was typed, and nothing else is.
+ *
+ * The general gap of 250 exists because thousands of Rechnung-2025NNNN.pdf differ by four
+ * digits, and it costs this case: `openit whatsapp` scored WhatsApp.app 1000 and
+ * whatsapp-bridge 800, a gap of 200, and asked. An exact name is not a near miss - it is the
+ * answer, as long as it is the only one.
+ */
+const soleExactName = (query: ParsedQuery, ranked: readonly Scored<Target>[]): Scored<Target> | null => {
+  const exact = ranked.filter((scored) => scored.quality >= SCORE.exact);
+  if (exact.length === 1) return exact[0] ?? null;
+  // Three things here are literally called "whatsapp": the app, and two source folders inside
+  // one project. One word that names an installed application is a request to launch it -
+  // finding the folder is what cdai is for.
+  const apps = exact.filter((scored) => scored.item.kind === 'app');
+  return query.tokens.length === 1 && apps.length === 1 ? apps[0] ?? null : null;
+};
+
 export const decideTargets = (
   query: ParsedQuery,
   ranked: readonly Scored<Target>[],
-): TargetDecision =>
-  query.order === 'none' ? decide(ranked, THRESHOLD) : applyOrder(query, ranked);
+): TargetDecision => {
+  if (query.order !== 'none') return applyOrder(query, ranked);
+  const decision = decide(ranked, THRESHOLD);
+  if (decision.kind === 'hit') return decision;
+  const exact = soleExactName(query, ranked);
+  return exact === null ? decision : { kind: 'hit', item: exact.item, score: exact.score };
+};

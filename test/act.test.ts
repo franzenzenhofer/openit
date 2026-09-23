@@ -39,6 +39,22 @@ const action = (target: Target, over: Partial<Action> = {}): Action => ({
 const file = (name: string): Target =>
   ({ kind: 'file', ref: join(fixture.docs, name), name, mtime: 0, source: 'doc-index' });
 
+const GONE_TIMEOUT_MS = 5000;
+const GONE_POLL_MS = 50;
+
+/** Whether a pid has really gone, within a bounded wait. */
+const reaped = async (pid: number): Promise<boolean> => {
+  for (let waited = 0; waited < GONE_TIMEOUT_MS; waited += GONE_POLL_MS) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, GONE_POLL_MS));
+  }
+  return false;
+};
+
 const planFor = (target: Target, bin: string) => {
   const planned = planAction(action(target), bin);
   if ('error' in planned) throw new Error(planned.error);
@@ -83,7 +99,10 @@ describe('the opener openit actually runs', () => {
     const pidFile = join(opener.dir, 'child.pid');
     expect(existsSync(pidFile)).toBe(true);
     const pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
-    expect(() => process.kill(pid, 0)).toThrow();
+    // A signal is delivered, not applied: the grandchild is gone shortly after the kill, not
+    // necessarily in the same tick. Asserting the instant made this pass on one machine and
+    // fail on a slower runner, which is a worse test than a bounded wait.
+    expect(await reaped(pid)).toBe(true);
   }, 30_000);
 
   it('drains a noisy opener instead of deadlocking on it, and repeats back a bounded line', async () => {

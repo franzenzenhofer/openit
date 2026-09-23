@@ -33,6 +33,11 @@ export interface Assessment {
   readonly external: boolean;
   readonly handler: HandlerKind;
   readonly handlerFromAi: boolean;
+  /**
+   * An application sitting in one of the directories macOS installs applications into, which
+   * openit lists by name and which is what a launcher exists to launch.
+   */
+  readonly curated: boolean;
   /** -R. Finder executes nothing, so this is the universal downgrade. */
   readonly reveal: boolean;
 }
@@ -62,6 +67,27 @@ const SCHEME_BASE: Record<SchemeClass, Consent> = {
   file: 'refuse',
 };
 
+/**
+ * The one exemption in the class table, and the reason a launcher is usable at all.
+ *
+ * `openit whatsapp` means launch WhatsApp. Every application lives outside a person's own
+ * roots, so without this an installed app is always "outside your roots" AND always
+ * `verify` - openit would refuse to do the most ordinary thing it exists for, and the answer
+ * to "type application to open it" every single time is that nobody reads it by the third time.
+ *
+ * What this does NOT cover is the case the class table is really about: a .app anywhere else,
+ * a quarantined one, one on a mounted volume, or one a model picked. Those stay exactly as
+ * strict as they were - and an app dropped in ~/Applications by a download carries
+ * com.apple.quarantine, which is refused outright.
+ */
+const isCuratedApp = (assessment: Assessment): boolean =>
+  assessment.curated
+  && assessment.subject.kind === 'path'
+  && assessment.subject.klass === 'application'
+  && !assessment.quarantined
+  && !assessment.external
+  && assessment.origin !== 'ai';
+
 export const baseConsent = (assessment: Assessment): Consent =>
   assessment.subject.kind === 'path'
     ? CLASS_BASE[assessment.subject.klass]
@@ -82,7 +108,8 @@ const contextual = (assessment: Assessment, from: Consent): Consent => {
     if (runsCode(assessment.subject)) return 'refuse';
     level = bump(level);
   }
-  if (assessment.escapesRoots) {
+  // An application directory is a root as far as applications are concerned.
+  if (assessment.escapesRoots && !isCuratedApp(assessment)) {
     if (assessment.origin !== 'literal' && index(from) >= index('verify')) return 'refuse';
     level = bump(level);
   }
@@ -111,7 +138,7 @@ const byHandler = (assessment: Assessment, from: Consent): Consent => {
  */
 export const requiredConsent = (assessment: Assessment): Consent => {
   if (assessment.subject.kind === 'url' && assessment.subject.hasUserInfo) return 'refuse';
-  const base = baseConsent(assessment);
+  const base = isCuratedApp(assessment) ? 'allow' : baseConsent(assessment);
   if (base === 'refuse') return 'refuse';
   // Revealing a path shows it; it never opens it. A URL cannot be revealed, so it is unaffected.
   if (assessment.reveal && assessment.subject.kind === 'path') return 'allow';

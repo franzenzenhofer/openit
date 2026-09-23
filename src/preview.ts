@@ -23,9 +23,11 @@ export interface PreviewInput {
 const flags = (assessed: Assessed): string[] => {
   const found: string[] = [];
   if (assessed.quarantine !== null) {
-    found.push(`quarantine: ${assessed.quarantine.agent || 'unknown'}`);
+    const how = assessed.quarantine.downloaded ? 'downloaded with' : 'quarantine from';
+    found.push(`${how} ${assessed.quarantine.agent || 'unknown'}`);
   }
-  if (assessed.facts?.escapesRoots === true) found.push('outside your roots');
+  if (assessed.assessment.curated) found.push('installed application');
+  else if (assessed.facts?.escapesRoots === true) found.push('outside your roots');
   if (assessed.facts?.volume === 'external') found.push('external volume');
   if (assessed.redirect !== null) found.push(`points at ${assessed.redirect.url.href}`);
   return found;

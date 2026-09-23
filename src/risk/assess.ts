@@ -4,6 +4,7 @@ import { locatorUrl } from './locator.js';
 import { consentRank, requiredConsent, type Assessment, type Consent, type Origin, type Subject } from './policy.js';
 import { readQuarantine, type Quarantine } from './quarantine.js';
 import { parseUrl, type ParsedUrl } from './scheme.js';
+import { APP_DIRS } from '../store/apps.js';
 import type { Handler } from '../handler.js';
 import type { Target } from '../target.js';
 
@@ -33,6 +34,11 @@ const kindOf = (handler: Handler): HandlerKind => {
   return handlerKind(handler.app.path, handler.app.bundleId);
 };
 
+/** An application openit found where macOS keeps applications, rather than one lying about. */
+const isCurated = (facts: TargetFacts): boolean =>
+  facts.klass === 'application'
+  && APP_DIRS().some((dir) => facts.realPath.startsWith(`${dir}/`));
+
 const urlSubject = (url: ParsedUrl): Subject =>
   ({ kind: 'url', scheme: url.klass, hasUserInfo: url.hasUserInfo });
 
@@ -45,6 +51,7 @@ const forUrl = (input: AssessInput, url: ParsedUrl): Assessed => {
     external: false,
     handler: kindOf(input.handler),
     handlerFromAi: input.handlerFromAi,
+    curated: false,
     reveal: false,
   };
   return {
@@ -54,6 +61,23 @@ const forUrl = (input: AssessInput, url: ParsedUrl): Assessed => {
 };
 
 const higher = (a: Consent, b: Consent): Consent => (consentRank(a) >= consentRank(b) ? a : b);
+
+const RUNS_CODE: ReadonlySet<string> = new Set([
+  'application', 'installer', 'bundle', 'executable', 'script',
+]);
+
+/**
+ * When a quarantine attribute is a reason to stop.
+ *
+ * For anything that can execute, its mere presence is: that is the bit Gatekeeper itself acts
+ * on, and an executable that arrived from anywhere is the case this whole layer exists for.
+ * For a document, only the download bit counts - a file a sandboxed app wrote carries the
+ * attribute too, and asking about those would train the person to say yes without reading.
+ */
+const isRisky = (quarantine: Quarantine | null, klass: string): boolean => {
+  if (quarantine === null || quarantine.userApproved) return false;
+  return quarantine.downloaded || RUNS_CODE.has(klass);
+};
 
 /**
  * A locator is judged twice: as the file it is, and as the place it points at. The stricter of
@@ -81,11 +105,12 @@ export const assess = (input: AssessInput): Assessed => {
   const assessment: Assessment = {
     subject: { kind: 'path', klass: facts.klass },
     origin: input.origin,
-    quarantined: quarantine !== null && !quarantine.userApproved,
+    quarantined: isRisky(quarantine, facts.klass),
     escapesRoots: facts.escapesRoots,
     external: facts.volume === 'external',
     handler: kindOf(input.handler),
     handlerFromAi: input.handlerFromAi,
+    curated: isCurated(facts),
     reveal: input.reveal,
   };
   const base: Assessed = {

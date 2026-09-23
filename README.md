@@ -107,8 +107,14 @@ The rules, in short:
   application, extension or not.
 - **Magic bytes outrank names.** A file with no extension starting `\xcf\xfa\xed\xfe` is an
   executable; a file *named* `x.app` is not an application.
-- **Quarantine, not the Downloads folder, is the signal.** A quarantined document asks once more;
-  a quarantined executable is refused outright.
+- **Quarantine, not the Downloads folder, is the signal** - and only its download bit. A file a
+  sandboxed app merely wrote carries the attribute too (every screenshot here says
+  `0082;…;Preview;`), and a question everybody clicks through protects nobody. A downloaded
+  document asks once more; a quarantined executable is refused outright.
+- **An installed application is launchable by name.** `openit whatsapp` opens WhatsApp: an
+  application in one of the four directories macOS installs applications into, unquarantined, on
+  the boot volume, that no model picked. A `.app` anywhere else stays at a typed confirmation,
+  and a quarantined one is refused.
 - **A `.webloc` is judged twice**: as the file it is, and as the place it points at. The stricter
   answer wins.
 - **`javascript:`, `data:`, `vbscript:` and `about:` are never opened**, from any origin, at any

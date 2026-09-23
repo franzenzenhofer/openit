@@ -6,6 +6,14 @@ const TIMEOUT_MS = 2000;
 const MAX_BUFFER = 8192;
 /** LaunchServices sets this bit once a person has said yes to this exact file. */
 const USER_APPROVED = 0x0040;
+/**
+ * The bit that actually means "this came from somewhere else". Everything else in the
+ * attribute is bookkeeping: a sandboxed app writing a file of its own stamps it too, which is
+ * why ~/Downloads/Screenshot....png on this machine carries `0082;...;Preview;` and is in no
+ * sense a download. Treating the mere presence of the attribute as danger would ask about half
+ * the files on the disk, and a question everybody clicks through protects nobody.
+ */
+const DOWNLOADED = 0x0001;
 
 export interface Quarantine {
   readonly raw: string;
@@ -14,6 +22,8 @@ export interface Quarantine {
   readonly agent: string;
   readonly at: number | null;
   readonly userApproved: boolean;
+  /** It came from outside this machine, rather than merely passing through a sandboxed app. */
+  readonly downloaded: boolean;
 }
 
 export const parseQuarantine = (raw: string): Quarantine | null => {
@@ -29,6 +39,7 @@ export const parseQuarantine = (raw: string): Quarantine | null => {
     agent: (agent ?? '').trim(),
     at: Number.isFinite(at) && at > 0 ? at : null,
     userApproved: (flags & USER_APPROVED) !== 0,
+    downloaded: (flags & DOWNLOADED) !== 0,
   };
 };
 

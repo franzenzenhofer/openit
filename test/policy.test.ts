@@ -24,6 +24,7 @@ const at = (over: Partial<Assessment> = {}): Assessment => ({
   external: false,
   handler: 'default',
   handlerFromAi: false,
+  curated: false,
   reveal: false,
   ...over,
 });
@@ -42,7 +43,11 @@ const everyAssessment = (): Assessment[] => {
           for (const escapesRoots of [false, true]) {
             for (const external of [false, true]) {
               for (const reveal of [false, true]) {
-                all.push(at({ subject, origin, handler, quarantined, escapesRoots, external, reveal }));
+                for (const curated of [false, true]) {
+                  all.push(at({
+                    subject, origin, handler, quarantined, escapesRoots, external, reveal, curated,
+                  }));
+                }
               }
             }
           }
@@ -74,6 +79,22 @@ describe('named rules a human can read', () => {
 
   it('asks twice before an app, an installer or a script', () => {
     for (const klass of RUNS_CODE) expect(requiredConsent(at({ subject: path(klass) }))).toBe('verify');
+  });
+
+  it('launches an installed application by name, because that is what a launcher is', () => {
+    const installed = { subject: path('application'), curated: true, escapesRoots: true } as const;
+    expect(requiredConsent(at({ ...installed, origin: 'deterministic' }))).toBe('allow');
+  });
+
+  it('is still strict about the application that is not where applications live', () => {
+    const loose = { subject: path('application'), curated: false } as const;
+    expect(requiredConsent(at({ ...loose, origin: 'deterministic' }))).toBe('verify');
+    const quarantined = { subject: path('application'), curated: true, quarantined: true } as const;
+    expect(requiredConsent(at(quarantined))).toBe('refuse');
+    const external = { subject: path('application'), curated: true, external: true } as const;
+    expect(requiredConsent(at({ ...external, origin: 'deterministic' }))).toBe('refuse');
+    const chosen = { subject: path('application'), curated: true, origin: 'ai' } as const;
+    expect(requiredConsent(at(chosen))).toBe('refuse');
   });
 
   it('never opens javascript:, data:, vbscript: or about:, from any origin', () => {
@@ -151,8 +172,14 @@ describe('invariants over the whole cross-product', () => {
     }
   });
 
-  it('INV-3 nothing that runs code is ever waved through', () => {
+  it('INV-3 nothing that runs code is ever waved through, except an installed application', () => {
     for (const assessment of all.filter((a) => !a.reveal && runsCode(a))) {
+      // The one exemption: an application where macOS installs applications, unquarantined,
+      // on the boot volume, that a model did not pick. That is what a launcher launches.
+      const launchable = assessment.curated && assessment.subject.kind === 'path'
+        && assessment.subject.klass === 'application' && !assessment.quarantined
+        && !assessment.external && assessment.origin !== 'ai';
+      if (launchable) continue;
       expect(requiredConsent(assessment)).not.toBe('allow');
     }
   });
