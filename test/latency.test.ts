@@ -24,8 +24,13 @@ const LARGE_INDEX_ENTRIES = 50_000;
  * CPU time, not wall clock: this gate exists to catch an accidental per-candidate xattr or
  * mdls call, and one of those is 1.4ms. Times fifty thousand candidates that is seventy
  * seconds, which this turns into a red build rather than a shipped hang.
+ *
+ * The cap is deliberately far above the real cost - 723ms on the machine openit was written
+ * on, 1020ms on a shared CI runner, which failed a 1000ms line at 2% over while telling nobody
+ * anything. This guards against an order-of-magnitude regression, not against runner variance,
+ * and 70 seconds is still fourteen times past it.
  */
-const LARGE_CLASSIFY_BUDGET_MS = 1000;
+const LARGE_CLASSIFY_BUDGET_MS = 5000;
 
 const opener = mkdtempSync(join(tmpdir(), 'openit-latency-'));
 const openBin = join(opener, 'open-ok.sh');

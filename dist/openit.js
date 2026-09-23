@@ -161,7 +161,7 @@ var hasPrivateMode = (path, directory) => {
 // package.json
 var package_default = {
   name: "openit",
-  version: "0.1.1",
+  version: "0.1.2",
   description: "Say what to open. It works out what you meant and which app should open it, then opens it.",
   type: "module",
   bin: {
