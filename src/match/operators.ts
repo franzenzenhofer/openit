@@ -35,42 +35,42 @@ export interface Operands {
   readonly background: boolean;
 }
 
+interface Phrase {
+  /** How many words the phrase consumed, beyond the operator itself. */
+  readonly taken: number;
+  readonly operand: string | null;
+  readonly flag: 'reveal' | 'background' | null;
+}
+
+/** "in the background" is "in background" with a stopword in the middle of it. */
+const after = (words: readonly string[], i: number): Phrase => {
+  const skip = words[i + 1] === 'the' ? 2 : 1;
+  const next = words[i + skip];
+  if (next === undefined) return { taken: 0, operand: null, flag: null };
+  if (REVEAL_WORDS.has(next)) return { taken: skip, operand: null, flag: 'reveal' };
+  if (BACKGROUND_WORDS.has(next)) return { taken: skip, operand: null, flag: 'background' };
+  return { taken: 1, operand: words[i + 1] ?? null, flag: null };
+};
+
 export const takeOperands = (words: readonly string[]): Scan<Operands> => {
   const rest: string[] = [];
-  let withWord: string | null = null;
-  let inWord: string | null = null;
-  let reveal = false;
-  let background = false;
+  const taken: { withWord: string | null; inWord: string | null; reveal: boolean; background: boolean } =
+    { withWord: null, inWord: null, reveal: false, background: false };
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];
     if (word === undefined) continue;
-    // "in the background" is the same phrase as "in background" with a stopword in it.
-    const next = words[i + 1] === 'the' ? words[i + 2] : words[i + 1];
-    const skip = words[i + 1] === 'the' ? 2 : 1;
-    const operand = word === WITH_OPERATOR || word === IN_OPERATOR;
-    if (operand && next !== undefined && REVEAL_WORDS.has(next)) {
-      reveal = true;
-      i += skip;
+    if (word !== WITH_OPERATOR && word !== IN_OPERATOR) {
+      rest.push(word);
       continue;
     }
-    if (operand && next !== undefined && BACKGROUND_WORDS.has(next)) {
-      background = true;
-      i += skip;
-      continue;
-    }
-    if (word === WITH_OPERATOR && next !== undefined && withWord === null) {
-      withWord = next;
-      i += 1;
-      continue;
-    }
-    if (word === IN_OPERATOR && next !== undefined && inWord === null) {
-      inWord = next;
-      i += 1;
-      continue;
-    }
-    rest.push(word);
+    const phrase = after(words, i);
+    if (phrase.flag !== null) taken[phrase.flag] = true;
+    else if (word === WITH_OPERATOR && taken.withWord === null) taken.withWord = phrase.operand;
+    else if (word === IN_OPERATOR && taken.inWord === null) taken.inWord = phrase.operand;
+    else if (phrase.operand === null) rest.push(word);
+    i += phrase.taken;
   }
-  return { rest, taken: { withWord, inWord, reveal, background } };
+  return { rest, taken };
 };
 
 /** Scanned before stopword removal, because "show" and "in" would otherwise vanish first. */

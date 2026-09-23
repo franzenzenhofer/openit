@@ -1852,41 +1852,32 @@ var dropStopwords = (words2, stopwords) => {
 };
 
 // src/match/operators.ts
+var after = (words2, i) => {
+  const skip = words2[i + 1] === "the" ? 2 : 1;
+  const next = words2[i + skip];
+  if (next === void 0) return { taken: 0, operand: null, flag: null };
+  if (REVEAL_WORDS.has(next)) return { taken: skip, operand: null, flag: "reveal" };
+  if (BACKGROUND_WORDS.has(next)) return { taken: skip, operand: null, flag: "background" };
+  return { taken: 1, operand: words2[i + 1] ?? null, flag: null };
+};
 var takeOperands = (words2) => {
   const rest = [];
-  let withWord = null;
-  let inWord = null;
-  let reveal = false;
-  let background = false;
+  const taken = { withWord: null, inWord: null, reveal: false, background: false };
   for (let i = 0; i < words2.length; i += 1) {
     const word = words2[i];
     if (word === void 0) continue;
-    const next = words2[i + 1] === "the" ? words2[i + 2] : words2[i + 1];
-    const skip = words2[i + 1] === "the" ? 2 : 1;
-    const operand = word === WITH_OPERATOR || word === IN_OPERATOR;
-    if (operand && next !== void 0 && REVEAL_WORDS.has(next)) {
-      reveal = true;
-      i += skip;
+    if (word !== WITH_OPERATOR && word !== IN_OPERATOR) {
+      rest.push(word);
       continue;
     }
-    if (operand && next !== void 0 && BACKGROUND_WORDS.has(next)) {
-      background = true;
-      i += skip;
-      continue;
-    }
-    if (word === WITH_OPERATOR && next !== void 0 && withWord === null) {
-      withWord = next;
-      i += 1;
-      continue;
-    }
-    if (word === IN_OPERATOR && next !== void 0 && inWord === null) {
-      inWord = next;
-      i += 1;
-      continue;
-    }
-    rest.push(word);
+    const phrase = after(words2, i);
+    if (phrase.flag !== null) taken[phrase.flag] = true;
+    else if (word === WITH_OPERATOR && taken.withWord === null) taken.withWord = phrase.operand;
+    else if (word === IN_OPERATOR && taken.inWord === null) taken.inWord = phrase.operand;
+    else if (phrase.operand === null) rest.push(word);
+    i += phrase.taken;
   }
-  return { rest, taken: { withWord, inWord, reveal, background } };
+  return { rest, taken };
 };
 var takeFlags = (words2) => {
   const rest = [];
