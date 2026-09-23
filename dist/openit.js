@@ -3777,19 +3777,22 @@ var flags2 = (assessed) => {
 };
 var preview = (input) => {
   const { plan, assessed } = input;
-  const verb = assessed.consent === "refuse" ? "would refuse" : "would open";
+  const revealing = plan.action.reveal || plan.action.handler.kind === "reveal";
+  const verb = assessed.consent === "refuse" ? "would refuse" : revealing ? "would show" : "would open";
   note(`openit: ${verb} ${displayTarget(plan.action.target)}`);
   if (assessed.facts !== null) line2("kind", classDescription(assessed.facts.klass));
   if (assessed.url !== null) line2("kind", `${assessed.url.scheme} link`);
   const who = handlerLabel(plan.action.handler);
-  line2("handler", who === "" ? "the system default (whatever a double click would do)" : who);
+  line2("handler", revealing ? "Finder, which selects it and launches nothing" : who === "" ? "the system default (whatever a double click would do)" : who);
   line2("origin", `${input.origin} match, score ${String(Math.round(input.score))}`);
   if (input.reason !== void 0 && input.reason !== "") line2("the model", `"${input.reason}"`);
   const found = flags2(assessed);
   if (found.length > 0) line2("flags", found.join(", "));
   line2("consent", assessed.consent);
   if (assessed.consent === "refuse") {
-    line2("instead", `openit --reveal ${plan.action.target.name} shows it without launching it`);
+    if (plan.action.target.kind !== "url") {
+      line2("instead", `openit --reveal ${plan.action.target.name} shows it without launching it`);
+    }
     return;
   }
   emit(plan.printed);

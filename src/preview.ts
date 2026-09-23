@@ -38,19 +38,25 @@ const flags = (assessed: Assessed): string[] => {
  */
 export const preview = (input: PreviewInput): void => {
   const { plan, assessed } = input;
-  const verb = assessed.consent === 'refuse' ? 'would refuse' : 'would open';
+  const revealing = plan.action.reveal || plan.action.handler.kind === 'reveal';
+  const verb = assessed.consent === 'refuse' ? 'would refuse'
+    : revealing ? 'would show' : 'would open';
   note(`openit: ${verb} ${displayTarget(plan.action.target)}`);
   if (assessed.facts !== null) line('kind', classDescription(assessed.facts.klass));
   if (assessed.url !== null) line('kind', `${assessed.url.scheme} link`);
   const who = handlerLabel(plan.action.handler);
-  line('handler', who === '' ? 'the system default (whatever a double click would do)' : who);
+  line('handler', revealing ? 'Finder, which selects it and launches nothing'
+    : who === '' ? 'the system default (whatever a double click would do)' : who);
   line('origin', `${input.origin} match, score ${String(Math.round(input.score))}`);
   if (input.reason !== undefined && input.reason !== '') line('the model', `"${input.reason}"`);
   const found = flags(assessed);
   if (found.length > 0) line('flags', found.join(', '));
   line('consent', assessed.consent);
   if (assessed.consent === 'refuse') {
-    line('instead', `openit --reveal ${plan.action.target.name} shows it without launching it`);
+    // A link cannot be shown in Finder, so offering that would be an instruction that fails.
+    if (plan.action.target.kind !== 'url') {
+      line('instead', `openit --reveal ${plan.action.target.name} shows it without launching it`);
+    }
     return;
   }
   emit(plan.printed);
