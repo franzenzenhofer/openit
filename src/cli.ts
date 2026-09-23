@@ -28,7 +28,7 @@ openit --dry-run <words>      print the plan, spawn nothing
 openit plan -- <words>        one JSON object on stdout
 openit which -- <words>       the resolved path or URL on stdout
 openit setup [--yes] [--root <path>] [--depth <n>] [--ai|--no-ai]
-openit index [--refresh]      show or rebuild what openit knows
+openit index [--refresh] [--dirs|--docs|--apps|--links]
 openit link add <name> <url>  teach a name for a page
 openit link list | forget <name>
 openit alias list | add <thing> -- <words> | forget -- <words>

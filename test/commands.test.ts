@@ -172,6 +172,13 @@ describe('index', () => {
     expect(run.stderr).toContain('links');
   });
 
+  it('rebuilds only the part it was told to', () => {
+    const run = openit('index', '--refresh', '--links');
+    expect(run.status).toBe(0);
+    expect(run.stderr).toContain('links');
+    expect(run.stderr).not.toContain('directories');
+  });
+
   it('refuses an option it does not know', () => {
     expect(openit('index', '--everything').status).toBe(1);
   });

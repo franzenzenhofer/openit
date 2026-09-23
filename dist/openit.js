@@ -4176,35 +4176,55 @@ var runDoctor = () => {
 };
 
 // src/commands/index-cmd.ts
+var USAGE = "usage: openit index [--refresh] [--dirs] [--docs] [--apps] [--links]";
+var PARTS = ["--dirs", "--docs", "--apps", "--links"];
+var parseIndexArgs = (args) => {
+  const named = args.filter((arg) => PARTS.includes(arg));
+  const unknown = args.find((arg) => arg !== "--refresh" && !PARTS.includes(arg));
+  return {
+    refresh: args.includes("--refresh"),
+    parts: named.length === 0 ? PARTS : named,
+    error: unknown === void 0 ? null : `unknown option ${unknown}`
+  };
+};
 var runIndex = (args) => {
-  const refresh = args.includes("--refresh");
-  const unknown = args.find((arg) => arg !== "--refresh");
-  if (unknown !== void 0) return fail(`unknown option ${unknown}`, "usage: openit index [--refresh]"), EXIT.error;
+  const options = parseIndexArgs(args);
+  if (options.error !== null) return fail(options.error, USAGE), EXIT.error;
   const config = loadConfig();
-  const index2 = refresh ? refreshIndex(config) : loadIndex();
-  const apps = refresh ? buildAppIndex() : loadAppIndex();
-  if (refresh) saveAppIndex(apps);
-  const docs = docTargets(config.docRoots, config.ignore);
-  const links = refresh ? buildLinkIndex(config.history) : loadLinkIndex(config.history);
-  if (refresh) saveLinkIndex(links);
-  note(`openit: ${String(index2.entries.length)} directories under ${String(config.roots.length)} roots`);
-  if (index2.truncated !== null) note(`        crawl stopped early (${index2.truncated})`);
-  note(`openit: ${String(docs.length)} files in ${String(config.docRoots.length)} document roots`);
-  note(`openit: ${String(apps.apps.length)} applications`);
-  note(`openit: ${String(links.length)} links${config.history ? " (bookmarks and history)" : " (bookmarks; history is off)"}, ${String(loadTaught().length)} taught by hand`);
-  for (const root of config.roots) note(`          ${contractTilde(root.path)}`);
+  const { refresh, parts } = options;
+  if (parts.includes("--dirs")) {
+    const index2 = refresh ? refreshIndex(config) : loadIndex();
+    note(`openit: ${String(index2.entries.length)} directories under ${String(config.roots.length)} roots`);
+    if (index2.truncated !== null) note(`        crawl stopped early (${index2.truncated})`);
+    for (const root of config.roots) note(`          ${contractTilde(root.path)}`);
+  }
+  if (parts.includes("--docs")) {
+    const docs = docTargets(config.docRoots, config.ignore);
+    note(`openit: ${String(docs.length)} files in ${String(config.docRoots.length)} document roots`);
+  }
+  if (parts.includes("--apps")) {
+    const apps = refresh ? buildAppIndex() : loadAppIndex();
+    if (refresh) saveAppIndex(apps);
+    note(`openit: ${String(apps.apps.length)} applications`);
+  }
+  if (parts.includes("--links")) {
+    const links = refresh ? buildLinkIndex(config.history) : loadLinkIndex(config.history);
+    if (refresh) saveLinkIndex(links);
+    const where = config.history ? "bookmarks and history" : "bookmarks; history is off";
+    note(`openit: ${String(links.length)} links (${where}), ${String(loadTaught().length)} taught by hand`);
+  }
   return EXIT.ok;
 };
 
 // src/commands/link.ts
-var USAGE = "openit link add <name> <url> | list | forget <name>";
+var USAGE2 = "openit link add <name> <url> | list | forget <name>";
 var MAX_NAME = 40;
 var MAX_LINKS = 256;
 var isLinkName = (name) => /^[a-z0-9][a-z0-9.-]*$/u.test(name) && name.length <= MAX_NAME;
 var listLinks = (links) => {
   if (links.length === 0) {
     note("openit: no links taught yet");
-    note(`        ${USAGE}`);
+    note(`        ${USAGE2}`);
     return EXIT.ok;
   }
   for (const link of links) note(`  ${link.name.padEnd(16)} ${sanitizeLabel(link.url, 120)}`);
@@ -4218,7 +4238,7 @@ var addLink = (links, name, url) => {
     ), EXIT.error;
   }
   const parsed = parseUrl(url);
-  if (parsed === null) return fail(`"${sanitizeLabel(url, 80)}" is not a URL`, USAGE), EXIT.error;
+  if (parsed === null) return fail(`"${sanitizeLabel(url, 80)}" is not a URL`, USAGE2), EXIT.error;
   if (parsed.klass === "forbidden" || parsed.klass === "file") {
     return fail(`openit never opens ${parsed.scheme}: links`, "nothing was saved"), EXIT.refused;
   }
@@ -4247,19 +4267,19 @@ var runLink = (args) => {
   const links = loadTaught();
   if (verb === void 0 || verb === "list") return listLinks(links);
   if (verb === "add") {
-    if (name === void 0 || url === void 0) return fail("add needs a name and a URL", USAGE), EXIT.error;
+    if (name === void 0 || url === void 0) return fail("add needs a name and a URL", USAGE2), EXIT.error;
     return addLink(links, name.toLowerCase(), url);
   }
   if (verb === "forget") {
-    if (name === void 0) return fail("forget needs a name", USAGE), EXIT.error;
+    if (name === void 0) return fail("forget needs a name", USAGE2), EXIT.error;
     return forgetLink(links, name.toLowerCase());
   }
-  return fail(`unknown link command "${sanitizeLabel(verb, MAX_NAME)}"`, USAGE), EXIT.error;
+  return fail(`unknown link command "${sanitizeLabel(verb, MAX_NAME)}"`, USAGE2), EXIT.error;
 };
 
 // src/commands/alias.ts
 import { existsSync as existsSync18, statSync as statSync14 } from "node:fs";
-var USAGE2 = [
+var USAGE3 = [
   "usage:",
   "  openit alias list",
   "  openit alias add <path or url> -- <words>",
@@ -4293,7 +4313,7 @@ var add = (args) => {
   const separator = args.indexOf("--");
   const what = separator === -1 ? args[0] : args.slice(0, separator)[0];
   const query2 = words(args);
-  if (what === void 0 || query2 === "") return fail("alias add needs a thing and words", USAGE2), EXIT.error;
+  if (what === void 0 || query2 === "") return fail("alias add needs a thing and words", USAGE3), EXIT.error;
   const spelled = spelledPath(what);
   if (spelled !== null && existsSync18(spelled)) {
     remember(query2, { kind: kindOf2(spelled), ref: spelled, handler: null });
@@ -4301,7 +4321,7 @@ var add = (args) => {
     return EXIT.ok;
   }
   const url = parseUrl(what);
-  if (url === null) return fail(`no such thing: ${displayPath(what)}`, USAGE2), EXIT.error;
+  if (url === null) return fail(`no such thing: ${displayPath(what)}`, USAGE3), EXIT.error;
   if (url.klass === "forbidden" || url.klass === "file" || url.hasUserInfo) {
     return fail(`openit never opens ${url.scheme}: links like that`, "nothing was saved"), EXIT.refused;
   }
@@ -4311,7 +4331,7 @@ var add = (args) => {
 };
 var drop = (args) => {
   const query2 = words(args);
-  if (query2 === "") return fail("alias forget needs the words to forget", USAGE2), EXIT.error;
+  if (query2 === "") return fail("alias forget needs the words to forget", USAGE3), EXIT.error;
   if (!forget(query2)) return fail(`nothing remembered for "${query2}"`, "openit alias list"), EXIT.error;
   note(`openit: forgot "${query2}"`);
   return EXIT.ok;
@@ -4321,11 +4341,11 @@ var runAlias = (args) => {
   if (command === void 0 || command === "list") return list2();
   if (command === "add") return add(args.slice(1));
   if (command === "forget") return drop(args.slice(1));
-  return fail(`unknown alias command "${sanitizeLabel(command, 40)}"`, USAGE2), EXIT.error;
+  return fail(`unknown alias command "${sanitizeLabel(command, 40)}"`, USAGE3), EXIT.error;
 };
 
 // src/commands/handler.ts
-var USAGE3 = [
+var USAGE4 = [
   "usage:",
   "  openit handler set --kind pdf --app Preview",
   '  openit handler set --ext md --command /usr/bin/env --args "code,{target}"',
@@ -4372,9 +4392,9 @@ var commandRejection = (rule) => {
 };
 var set = (args) => {
   const options = parseHandlerArgs(args);
-  if (options.error !== null) return fail(options.error, USAGE3), EXIT.error;
+  if (options.error !== null) return fail(options.error, USAGE4), EXIT.error;
   const rejected = rejection(options);
-  if (rejected !== null) return fail(rejected, USAGE3), EXIT.error;
+  if (rejected !== null) return fail(rejected, USAGE4), EXIT.error;
   const rule = {
     ext: options.ext,
     kind: options.kind,
@@ -4390,7 +4410,7 @@ var set = (args) => {
   }
   if (rule.command !== "") {
     const bad = commandRejection(rule);
-    if (bad !== null) return fail(bad, USAGE3), EXIT.error;
+    if (bad !== null) return fail(bad, USAGE4), EXIT.error;
   }
   const config = loadConfig();
   saveConfig({ ...config, handlers: [...config.handlers.filter((one) => !sameTarget(one, rule)), rule] });
@@ -4401,7 +4421,7 @@ var list3 = () => {
   const { handlers } = loadConfig();
   if (handlers.length === 0) {
     note("openit: no handlers taught; everything opens the way a double click would");
-    note(`        ${USAGE3.split("\n")[1] ?? ""}`);
+    note(`        ${USAGE4.split("\n")[1] ?? ""}`);
     return EXIT.ok;
   }
   for (const rule of handlers) note(describe2(rule));
@@ -4409,8 +4429,8 @@ var list3 = () => {
 };
 var forget2 = (args) => {
   const options = parseHandlerArgs(args);
-  if (options.error !== null) return fail(options.error, USAGE3), EXIT.error;
-  if (options.ext === "" && options.kind === "") return fail("say which rule: --ext or --kind", USAGE3), EXIT.error;
+  if (options.error !== null) return fail(options.error, USAGE4), EXIT.error;
+  if (options.ext === "" && options.kind === "") return fail("say which rule: --ext or --kind", USAGE4), EXIT.error;
   const config = loadConfig();
   const kept = config.handlers.filter(
     (rule) => !sameTarget(rule, { ...rule, ext: options.ext, kind: options.kind })
@@ -4425,7 +4445,7 @@ var runHandler = (args) => {
   if (command === void 0 || command === "list") return list3();
   if (command === "set") return set(args.slice(1));
   if (command === "forget") return forget2(args.slice(1));
-  return fail(`unknown handler command "${sanitizeLabel(command, 40)}"`, USAGE3), EXIT.error;
+  return fail(`unknown handler command "${sanitizeLabel(command, 40)}"`, USAGE4), EXIT.error;
 };
 
 // src/commands/complete.ts
@@ -4497,7 +4517,7 @@ end
 complete -c openit -f -a '(__openit_complete)'`;
 
 // src/commands/init.ts
-var USAGE4 = "usage: openit init <zsh|bash|fish>";
+var USAGE5 = "usage: openit init <zsh|bash|fish>";
 var BY_SHELL = /* @__PURE__ */ new Map([
   ["zsh", ZSH_INIT],
   ["bash", BASH_INIT],
@@ -4505,9 +4525,9 @@ var BY_SHELL = /* @__PURE__ */ new Map([
 ]);
 var runInit = (args) => {
   const shell = args[0];
-  if (shell === void 0) return fail("which shell?", USAGE4), EXIT.error;
+  if (shell === void 0) return fail("which shell?", USAGE5), EXIT.error;
   const script = BY_SHELL.get(shell);
-  if (script === void 0) return fail(`openit knows zsh, bash and fish, not "${shell}"`, USAGE4), EXIT.error;
+  if (script === void 0) return fail(`openit knows zsh, bash and fish, not "${shell}"`, USAGE5), EXIT.error;
   emit(script);
   return EXIT.ok;
 };
@@ -4515,7 +4535,7 @@ var runInit = (args) => {
 // src/cli.ts
 setProduct({ name: "openit", envPrefix: "OPENIT" });
 var VERSION4 = `openit ${package_default.version}`;
-var USAGE5 = `openit - say what to open, it works out what and with what, then opens it
+var USAGE6 = `openit - say what to open, it works out what and with what, then opens it
 
 openit <words>                open the thing you mean
 openit --with <app> <words>   name the handler yourself
@@ -4525,7 +4545,7 @@ openit --dry-run <words>      print the plan, spawn nothing
 openit plan -- <words>        one JSON object on stdout
 openit which -- <words>       the resolved path or URL on stdout
 openit setup [--yes] [--root <path>] [--depth <n>] [--ai|--no-ai]
-openit index [--refresh]      show or rebuild what openit knows
+openit index [--refresh] [--dirs|--docs|--apps|--links]
 openit link add <name> <url>  teach a name for a page
 openit link list | forget <name>
 openit alias list | add <thing> -- <words> | forget -- <words>
@@ -4543,13 +4563,13 @@ var queryArgs = (args) => {
 };
 var run = async (args, mode) => {
   const parsed = parseArgs(args);
-  if (parsed.error !== null) return fail(parsed.error, USAGE5.split("\n")[2] ?? ""), EXIT.error;
+  if (parsed.error !== null) return fail(parsed.error, USAGE6.split("\n")[2] ?? ""), EXIT.error;
   return runQuery(parsed.words, { ...parsed.options, mode: mode === "run" ? parsed.options.mode : mode });
 };
 var dispatch = async (args) => {
   const command = args[0];
   if (command === void 0 || command === "--help" || command === "-h") {
-    note(USAGE5);
+    note(USAGE6);
     return command === void 0 ? EXIT.error : EXIT.ok;
   }
   if (command === "--version" || command === "-v") {

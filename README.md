@@ -180,7 +180,7 @@ openit alias list | add <thing> -- <words> | forget -- <words>
 openit handler set --kind pdf --app Preview
 openit handler set --ext md --command /usr/bin/env --args "code,{target}"
 openit handler list | forget --kind pdf
-openit index [--refresh]
+openit index [--refresh] [--dirs|--docs|--apps|--links]
 openit setup | doctor | init <zsh|bash|fish> | complete | --version
 ```
 
