@@ -66,7 +66,12 @@ export const LIMIT = {
   lazyChildren: 400,
   /** Directories whose children are listed at all. */
   lazyParents: 3,
-  urlIndex: 300,
+  /**
+   * Bookmarks plus, when it is turned on, the most visited pages of every browser profile.
+   * Measured at 452 bookmarks across seven Chrome profiles on the machine openit was written
+   * on, so a few hundred would have silently truncated one real user's own bookmarks.
+   */
+  urlIndex: 2000,
   apps: 400,
 } as const;
 

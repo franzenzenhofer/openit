@@ -73,8 +73,11 @@ const runsCode = (subject: Subject): boolean =>
 
 const contextual = (assessment: Assessment, from: Consent): Consent => {
   let level = from;
-  // A matched title and the URL behind it are different strings; only a typed URL is the URL.
-  if (assessment.subject.kind === 'url' && assessment.origin !== 'literal') level = bump(level);
+  // A matched title and the URL behind it are different strings, so a link that was merely
+  // matched is asked about. A typed one and a taught one are not: in both cases this exact URL
+  // is the one the user themselves put in front of openit.
+  const typed = assessment.origin === 'literal' || assessment.origin === 'alias';
+  if (assessment.subject.kind === 'url' && !typed) level = bump(level);
   if (assessment.quarantined) {
     if (runsCode(assessment.subject)) return 'refuse';
     level = bump(level);

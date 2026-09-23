@@ -26,8 +26,13 @@ const parentPath = (path: string): string => {
   return idx <= 0 ? '' : path.slice(0, idx);
 };
 
+const nameScoreOf = (token: string, target: Target): number => {
+  const names = target.aka === undefined ? [target.name] : [target.name, ...target.aka];
+  return Math.max(...names.map((name) => matchName(token, name, MATCH)));
+};
+
 const tokenScore = (token: string, target: Target): number => {
-  const nameScore = matchName(token, target.name, MATCH);
+  const nameScore = nameScoreOf(token, target);
   if (nameScore > SCORE.none) return nameScore;
   if (target.kind === 'url') {
     return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;

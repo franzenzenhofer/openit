@@ -278,7 +278,7 @@ var parseArgs = (args) => {
 };
 
 // src/commands/query.ts
-import { existsSync as existsSync10 } from "node:fs";
+import { existsSync as existsSync13 } from "node:fs";
 
 // node_modules/@franzenzenhofer/intent-core/dist/picker.js
 import { spawnSync } from "node:child_process";
@@ -679,6 +679,393 @@ var literalTarget = (args) => {
   return { kind: "url", ref: word, name: word, mtime: 0, source: "literal" };
 };
 
+// src/store/links.ts
+import { existsSync as existsSync7 } from "node:fs";
+
+// src/match/constants.ts
+var SCORE = {
+  exact: 1e3,
+  prefix: 800,
+  wordBoundary: 600,
+  substring: 400,
+  fuzzyMax: 380,
+  /** Found nowhere in the name but present in the path above it. */
+  pathOnly: 200,
+  none: 0
+};
+var MATCH = {
+  weights: SCORE,
+  fuzzy: { baseShare: 0.45, densityShare: 0.35, coverageShare: 0.2 },
+  typo: { minLength: 3, maxLength: 64 }
+};
+var BONUS = {
+  /** Weight of log2(1 + frecency), over openit's own opening history. */
+  frecency: 100,
+  underCwd: 25,
+  brevity: 40,
+  /** The query named a kind and this candidate is that kind. */
+  kindMatch: 60,
+  /** openit's targets are documents, not projects, so recent beats old. */
+  recency: 45,
+  /** The whole query is one word and it exactly names an installed app. */
+  appExact: 80
+};
+var THRESHOLD = {
+  hit: 550,
+  gap: 250,
+  candidate: 400,
+  minPickerCandidates: 2,
+  picker: 10,
+  unsure: 30
+};
+var LITERAL_SCORE = 1e3;
+var ORDERED_HIT = 400;
+var HANDLER_THRESHOLD = { hit: 550, candidate: 400 };
+var LIMIT = {
+  picker: 10,
+  aiTargets: 30,
+  aiFrecent: 20,
+  suggestions: 3,
+  /** Spotlight hits stat'd before the mtime pick. */
+  spotlight: 4e3,
+  /** Children listed per matched directory. */
+  lazyChildren: 400,
+  /** Directories whose children are listed at all. */
+  lazyParents: 3,
+  /**
+   * Bookmarks plus, when it is turned on, the most visited pages of every browser profile.
+   * Measured at 452 bookmarks across seven Chrome profiles on the machine openit was written
+   * on, so a few hundred would have silently truncated one real user's own bookmarks.
+   */
+  urlIndex: 2e3,
+  apps: 400
+};
+var STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "a",
+  "an",
+  "my",
+  "to",
+  "of",
+  "for",
+  "from",
+  "this",
+  "that",
+  "me",
+  "please",
+  "it",
+  "up",
+  "open",
+  "openit"
+]);
+var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
+var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
+var REVEAL_WORDS = /* @__PURE__ */ new Set(["reveal", "finder"]);
+var NEW_WORDS = /* @__PURE__ */ new Set(["new"]);
+var BACKGROUND_WORDS = /* @__PURE__ */ new Set(["background", "bg"]);
+var WITH_OPERATOR = "with";
+var IN_OPERATOR = "in";
+var YEARS = { min: 1990, max: 2999 };
+
+// src/ai/sanitize.ts
+var LYING = [
+  [0, 31],
+  [127, 159],
+  // C0 and C1 controls
+  [173, 173],
+  // soft hyphen
+  [8203, 8207],
+  // zero width, and the LTR/RTL marks
+  [8234, 8238],
+  // bidi embeddings and overrides
+  [8288, 8292],
+  [8294, 8297],
+  // word joiner, invisible operators, bidi isolates
+  [65279, 65279],
+  // byte order mark
+  [65024, 65039],
+  // variation selectors
+  [57344, 63743],
+  // private use area
+  [917504, 917631],
+  // the tag block: invisible instruction carrier
+  [983040, 1114109]
+  // supplementary private use areas
+];
+var lies = (codePoint) => LYING.some(([low, high]) => codePoint >= low && codePoint <= high);
+var ELLIPSIS = "\u2026";
+var sanitizeLabel = (text, max) => {
+  const kept = [...text.normalize("NFC")].filter((char) => !lies(char.codePointAt(0) ?? 0)).join("");
+  const flattened = kept.replace(/\s+/gu, " ").trim();
+  const graphemes = [...flattened];
+  return graphemes.length <= max ? flattened : `${graphemes.slice(0, max - 1).join("")}${ELLIPSIS}`;
+};
+
+// src/risk/scheme.ts
+var FORBIDDEN = /* @__PURE__ */ new Set(["javascript", "data", "vbscript", "about", "blob", "view-source"]);
+var WEB = /* @__PURE__ */ new Set(["http", "https"]);
+var MESSAGE = /* @__PURE__ */ new Set(["mailto", "tel", "sms", "facetime", "facetime-audio", "imessage"]);
+var APPLE = /* @__PURE__ */ new Set(["macappstore", "macappstores", "itms", "itmss", "itms-apps", "prefs"]);
+var APPLE_PREFIX = "x-apple-";
+var classifyScheme = (scheme2) => {
+  const lower = scheme2.toLowerCase().replace(/:$/u, "");
+  if (FORBIDDEN.has(lower)) return "forbidden";
+  if (WEB.has(lower)) return "web";
+  if (lower === "file") return "file";
+  if (MESSAGE.has(lower)) return "message";
+  if (APPLE.has(lower) || lower.startsWith(APPLE_PREFIX)) return "apple";
+  return "custom";
+};
+var parseUrl = (text) => {
+  if (/[\r\n]/u.test(text)) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  const scheme2 = url.protocol.replace(/:$/u, "").toLowerCase();
+  return {
+    url,
+    scheme: scheme2,
+    klass: classifyScheme(scheme2),
+    hasUserInfo: url.username !== "" || url.password !== ""
+  };
+};
+
+// src/store/bookmarks.ts
+import { existsSync as existsSync5, readdirSync as readdirSync2, statSync as statSync4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join3 } from "node:path";
+var BROWSER_DIRS = [
+  ["Chrome", ["Google", "Chrome"]],
+  ["Chrome Beta", ["Google", "Chrome Beta"]],
+  ["Brave", ["BraveSoftware", "Brave-Browser"]],
+  ["Edge", ["Microsoft Edge"]],
+  ["Vivaldi", ["Vivaldi"]],
+  ["Chromium", ["Chromium"]],
+  ["Arc", ["Arc", "User Data"]]
+];
+var MAX_DEPTH2 = 12;
+var WEBKIT_EPOCH_OFFSET_MS = 116444736e5;
+var MICROS_PER_MILLI = 1e3;
+var supportDir = () => join3(homedir2(), "Library", "Application Support");
+var isDir = (path) => {
+  try {
+    return statSync4(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var browserProfiles = (base = supportDir()) => {
+  const found = [];
+  for (const [browser, segments2] of BROWSER_DIRS) {
+    const root = join3(base, ...segments2);
+    if (!isDir(root)) continue;
+    let names = [];
+    try {
+      names = readdirSync2(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const dir = join3(root, name);
+      if (existsSync5(join3(dir, "Bookmarks")) || existsSync5(join3(dir, "History"))) {
+        found.push({ browser, profile: name, dir });
+      }
+    }
+  }
+  return found;
+};
+var webkitTimeToMs = (value) => {
+  const micros = typeof value === "string" ? Number.parseInt(value, 10) : Number(value);
+  if (!Number.isFinite(micros) || micros <= 0) return 0;
+  return Math.round(micros / MICROS_PER_MILLI) - WEBKIT_EPOCH_OFFSET_MS;
+};
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var walk = (node2, depth, out) => {
+  if (!isRecord2(node2) || depth > MAX_DEPTH2) return;
+  const children = node2["children"];
+  if (Array.isArray(children)) {
+    for (const child of children) walk(child, depth + 1, out);
+    return;
+  }
+  const url = node2["url"];
+  const name = node2["name"];
+  if (node2["type"] !== "url" || typeof url !== "string") return;
+  out.push({
+    url,
+    title: typeof name === "string" ? name : "",
+    source: "bookmark",
+    at: webkitTimeToMs(node2["date_added"])
+  });
+};
+var readBookmarkFile = (file) => {
+  const parsed = tryReadJson(file);
+  if (!isRecord2(parsed)) return [];
+  const roots = parsed["roots"];
+  if (!isRecord2(roots)) return [];
+  const found = [];
+  for (const root of Object.values(roots)) walk(root, 0, found);
+  return found;
+};
+var readBookmarks = (profiles) => profiles.flatMap((profile) => readBookmarkFile(join3(profile.dir, "Bookmarks")));
+
+// src/store/history.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { copyFileSync, existsSync as existsSync6, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join4 } from "node:path";
+var SQLITE = "/usr/bin/sqlite3";
+var TIMEOUT_MS = 5e3;
+var MAX_BUFFER = 8 * 1024 * 1024;
+var HISTORY_LIMIT = 400;
+var SELECT = `SELECT url, title, visit_count, last_visit_time FROM urls WHERE hidden = 0 AND url NOT LIKE 'chrome%' ORDER BY visit_count DESC LIMIT ${String(HISTORY_LIMIT)};`;
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var parseRows = (raw) => {
+  if (raw.trim() === "") return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((row) => {
+    if (!isRecord3(row) || typeof row.url !== "string") return [];
+    return [{
+      url: row.url,
+      title: typeof row.title === "string" ? row.title : "",
+      source: "history",
+      at: webkitTimeToMs(row.last_visit_time)
+    }];
+  });
+};
+var query = (file) => {
+  const result = spawnSync2(SQLITE, ["-json", `file:${file}?immutable=1`, SELECT], {
+    encoding: "utf8",
+    timeout: TIMEOUT_MS,
+    maxBuffer: MAX_BUFFER
+  });
+  return result.status === 0 && typeof result.stdout === "string" ? result.stdout : "";
+};
+var readHistoryFile = (source) => {
+  if (!existsSync6(source) || !existsSync6(SQLITE)) return [];
+  const dir = mkdtempSync(join4(tmpdir(), "openit-history-"));
+  try {
+    const copy = join4(dir, "History");
+    copyFileSync(source, copy);
+    return parseRows(query(copy));
+  } catch {
+    return [];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+var readHistory = (profiles) => profiles.flatMap((profile) => readHistoryFile(join4(profile.dir, "History")));
+
+// src/store/links.ts
+var LINKS_FILE = "links.json";
+var INDEX_FILE = "url-index.json";
+var VERSION = 1;
+var INDEX_TTL_MS = 6 * 60 * 60 * 1e3;
+var MAX_TITLE = 80;
+var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var normalizeUrl = (url) => {
+  const parsed = parseUrl(url);
+  if (parsed === null) return url.trim().toLowerCase();
+  const host = parsed.url.hostname.replace(/^www\./u, "");
+  const path = parsed.url.pathname === "/" ? "" : parsed.url.pathname.replace(/\/$/u, "");
+  return `${parsed.scheme}://${host}${path}${parsed.url.search}`;
+};
+var isWeb = (url) => parseUrl(url)?.klass === "web";
+var mergeLinks = (links) => {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const link of [...links].sort((a, b) => b.at - a.at)) {
+    const key = normalizeUrl(link.url);
+    const seen = byKey.get(key);
+    if (seen === void 0 || seen.title === "" && link.title !== "") byKey.set(key, link);
+  }
+  return [...byKey.values()].slice(0, LIMIT.urlIndex);
+};
+var readLink = (value, source) => {
+  if (!isRecord4(value) || typeof value["url"] !== "string") return void 0;
+  const at = typeof value["at"] === "number" ? value["at"] : 0;
+  const title = typeof value["title"] === "string" ? value["title"] : "";
+  return { url: value["url"], title, source, at };
+};
+var loadTaught = () => {
+  const parsed = tryReadJson(stateFile(LINKS_FILE));
+  if (!isRecord4(parsed) || !Array.isArray(parsed["links"])) return [];
+  return parsed["links"].flatMap((value) => {
+    if (!isRecord4(value)) return [];
+    const { name, url, addedAt } = value;
+    if (typeof name !== "string" || name === "" || typeof url !== "string") return [];
+    if (parseUrl(url) === null) return [];
+    return [{ name, url, addedAt: typeof addedAt === "number" ? addedAt : 0 }];
+  });
+};
+var saveTaught = (links) => {
+  writeAtomic(stateFile(LINKS_FILE), `${JSON.stringify({ version: VERSION, links }, null, 2)}
+`);
+};
+var buildLinkIndex = (history, now = Date.now()) => {
+  const profiles = browserProfiles();
+  const found = [
+    ...readBookmarks(profiles).filter((link) => isWeb(link.url)),
+    ...history ? readHistory(profiles).filter((link) => isWeb(link.url)) : []
+  ];
+  return mergeLinks(found.map((link) => ({ ...link, at: link.at === 0 ? now : link.at })));
+};
+var saveLinkIndex = (links, now = Date.now()) => {
+  try {
+    writeAtomic(
+      stateFile(INDEX_FILE),
+      `${JSON.stringify({ version: VERSION, generatedAt: now, links })}
+`
+    );
+  } catch {
+  }
+};
+var loadLinkIndex = (history, now = Date.now()) => {
+  const file = stateFile(INDEX_FILE);
+  const parsed = existsSync7(file) ? tryReadJson(file) : void 0;
+  if (isRecord4(parsed) && parsed["version"] === VERSION && Array.isArray(parsed["links"])) {
+    const generatedAt = typeof parsed["generatedAt"] === "number" ? parsed["generatedAt"] : 0;
+    if (now - generatedAt <= INDEX_TTL_MS) {
+      return parsed["links"].flatMap((value) => {
+        const link = readLink(value, "bookmark");
+        return link === void 0 ? [] : [link];
+      });
+    }
+  }
+  const built = buildLinkIndex(history, now);
+  saveLinkIndex(built, now);
+  return built;
+};
+var nameOf2 = (link) => {
+  const title = sanitizeLabel(link.title, MAX_TITLE);
+  return title === "" ? hostLabels(link.url)[0] ?? link.url : title;
+};
+var linkTargets = (links, taught) => [
+  ...taught.map((link) => ({
+    kind: "url",
+    ref: link.url,
+    name: link.name,
+    aka: hostLabels(link.url),
+    mtime: link.addedAt,
+    source: "link-index"
+  })),
+  ...links.map((link) => ({
+    kind: "url",
+    ref: link.url,
+    name: nameOf2(link),
+    aka: [...hostLabels(link.url), ...pathNames(link.url)],
+    mtime: link.at,
+    source: "link-index"
+  }))
+];
+
 // node_modules/@franzenzenhofer/intent-core/dist/match/score.js
 var SEGMENT_SPLIT = /[^a-z0-9]+/u;
 var LOG_BASE_2 = Math.LN2;
@@ -760,86 +1147,6 @@ var matchName = (token, name, options) => {
 };
 var frecencyBonus = (frecency2, weight) => frecency2 <= 0 ? 0 : weight * (Math.log1p(frecency2) / LOG_BASE_2);
 
-// src/match/constants.ts
-var SCORE = {
-  exact: 1e3,
-  prefix: 800,
-  wordBoundary: 600,
-  substring: 400,
-  fuzzyMax: 380,
-  /** Found nowhere in the name but present in the path above it. */
-  pathOnly: 200,
-  none: 0
-};
-var MATCH = {
-  weights: SCORE,
-  fuzzy: { baseShare: 0.45, densityShare: 0.35, coverageShare: 0.2 },
-  typo: { minLength: 3, maxLength: 64 }
-};
-var BONUS = {
-  /** Weight of log2(1 + frecency), over openit's own opening history. */
-  frecency: 100,
-  underCwd: 25,
-  brevity: 40,
-  /** The query named a kind and this candidate is that kind. */
-  kindMatch: 60,
-  /** openit's targets are documents, not projects, so recent beats old. */
-  recency: 45,
-  /** The whole query is one word and it exactly names an installed app. */
-  appExact: 80
-};
-var THRESHOLD = {
-  hit: 550,
-  gap: 250,
-  candidate: 400,
-  minPickerCandidates: 2,
-  picker: 10,
-  unsure: 30
-};
-var LITERAL_SCORE = 1e3;
-var ORDERED_HIT = 400;
-var HANDLER_THRESHOLD = { hit: 550, candidate: 400 };
-var LIMIT = {
-  picker: 10,
-  aiTargets: 30,
-  aiFrecent: 20,
-  suggestions: 3,
-  /** Spotlight hits stat'd before the mtime pick. */
-  spotlight: 4e3,
-  /** Children listed per matched directory. */
-  lazyChildren: 400,
-  /** Directories whose children are listed at all. */
-  lazyParents: 3,
-  urlIndex: 300,
-  apps: 400
-};
-var STOPWORDS = /* @__PURE__ */ new Set([
-  "the",
-  "a",
-  "an",
-  "my",
-  "to",
-  "of",
-  "for",
-  "from",
-  "this",
-  "that",
-  "me",
-  "please",
-  "it",
-  "up",
-  "open",
-  "openit"
-]);
-var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
-var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
-var REVEAL_WORDS = /* @__PURE__ */ new Set(["reveal", "finder"]);
-var NEW_WORDS = /* @__PURE__ */ new Set(["new"]);
-var BACKGROUND_WORDS = /* @__PURE__ */ new Set(["background", "bg"]);
-var WITH_OPERATOR = "with";
-var IN_OPERATOR = "in";
-var YEARS = { min: 1990, max: 2999 };
-
 // src/match/handler-match.ts
 var scoreApps = (word, apps) => apps.map((app) => ({ handler: { kind: "app", app }, score: matchName(word, app.name, MATCH) })).filter((choice) => choice.score > 0).sort((a, b) => b.score - a.score);
 var templateFor = (rule) => {
@@ -858,16 +1165,16 @@ var scoreCommands = (word, rules) => rules.filter((rule) => rule.command !== "")
 }).sort((a, b) => b.score - a.score);
 var handlerLabelOf = (choice) => choice.handler.kind === "app" ? choice.handler.app.name : choice.handler.kind === "command" ? choice.handler.template.label : "Finder";
 var resolveHandler = (input) => {
-  const { query } = input;
-  if (query.reveal) return { kind: "handler", handler: { kind: "reveal" } };
-  const word = query.handlerWord;
+  const { query: query2 } = input;
+  if (query2.reveal) return { kind: "handler", handler: { kind: "reveal" } };
+  const word = query2.handlerWord;
   if (word === null) return { kind: "handler", handler: { kind: "default" } };
   const scored = [...scoreCommands(word, input.rules), ...scoreApps(word, input.apps)].sort((a, b) => b.score - a.score);
   const best = scored[0];
   if (best !== void 0 && best.score >= HANDLER_THRESHOLD.hit) {
     return { kind: "handler", handler: best.handler };
   }
-  if (!query.handlerExplicit) return { kind: "handler", handler: { kind: "default" } };
+  if (!query2.handlerExplicit) return { kind: "handler", handler: { kind: "default" } };
   return {
     kind: "unknown",
     word,
@@ -1044,22 +1351,22 @@ var tokenize = (input) => {
   };
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
-var resolveIn = (query, namesPlace, namesApp) => {
-  const word = query.inWord;
-  if (word === null) return query;
-  if (namesPlace(word)) return { ...query, scope: word };
-  if (query.handlerWord === null && namesApp(word)) {
-    return { ...query, handlerWord: word, handlerExplicit: true };
+var resolveIn = (query2, namesPlace, namesApp) => {
+  const word = query2.inWord;
+  if (word === null) return query2;
+  if (namesPlace(word)) return { ...query2, scope: word };
+  if (query2.handlerWord === null && namesApp(word)) {
+    return { ...query2, handlerWord: word, handlerExplicit: true };
   }
-  return { ...query, scope: word };
+  return { ...query2, scope: word };
 };
-var readings = (query) => {
-  const all = [query];
-  const spelled = pathReading(query.tokens);
+var readings = (query2) => {
+  const all = [query2];
+  const spelled = pathReading(query2.tokens);
   if (spelled !== null) {
-    all.push({ ...query, tokens: spelled.tokens, within: [...query.within, ...spelled.within] });
+    all.push({ ...query2, tokens: spelled.tokens, within: [...query2.within, ...spelled.within] });
   }
-  for (const tokens of urlReadings(query.tokens)) all.push({ ...query, tokens });
+  for (const tokens of urlReadings(query2.tokens)) all.push({ ...query2, tokens });
   return all;
 };
 
@@ -1067,9 +1374,9 @@ var readings = (query) => {
 import { basename as basename3 } from "node:path";
 
 // src/store/apps.ts
-import { existsSync as existsSync5, readdirSync as readdirSync2, statSync as statSync4 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
+import { existsSync as existsSync8, readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
 
 // src/handler.ts
 import { basename as basename2 } from "node:path";
@@ -1085,18 +1392,18 @@ var validTemplate = (template) => template.command.startsWith("/") && template.a
 
 // src/store/apps.ts
 var APPS_FILE = "apps.json";
-var VERSION = 1;
+var VERSION2 = 1;
 var TTL_MS = 24 * 60 * 60 * 1e3;
 var APP_DIRS = () => [
   "/Applications",
   "/System/Applications",
   "/System/Applications/Utilities",
-  join3(homedir2(), "Applications")
+  join5(homedir3(), "Applications")
 ];
 var EXTRA_APPS = ["/System/Library/CoreServices/Finder.app"];
 var isApp = (path) => {
   try {
-    return statSync4(path).isDirectory() && statSync4(join3(path, "Contents", "MacOS")).isDirectory();
+    return statSync5(path).isDirectory() && statSync5(join5(path, "Contents", "MacOS")).isDirectory();
   } catch {
     return false;
   }
@@ -1104,15 +1411,15 @@ var isApp = (path) => {
 var appsIn = (dir) => {
   let names;
   try {
-    names = readdirSync2(dir);
+    names = readdirSync3(dir);
   } catch {
     return [];
   }
-  const direct = names.filter((name) => name.endsWith(".app")).map((name) => join3(dir, name));
+  const direct = names.filter((name) => name.endsWith(".app")).map((name) => join5(dir, name));
   const nested = names.filter((name) => !name.endsWith(".app") && !name.startsWith(".")).flatMap((name) => {
-    const sub = join3(dir, name);
+    const sub = join5(dir, name);
     try {
-      return readdirSync2(sub).filter((n) => n.endsWith(".app")).map((n) => join3(sub, n));
+      return readdirSync3(sub).filter((n) => n.endsWith(".app")).map((n) => join5(sub, n));
     } catch {
       return [];
     }
@@ -1127,11 +1434,11 @@ var buildAppIndex = (now = Date.now()) => {
     seen.add(path);
     apps.push({ name: appName(path), path, bundleId: null });
   }
-  return { version: VERSION, generatedAt: now, apps };
+  return { version: VERSION2, generatedAt: now, apps };
 };
-var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readApp = (value) => {
-  if (!isRecord2(value)) return void 0;
+  if (!isRecord5(value)) return void 0;
   const { name, path, bundleId } = value;
   if (typeof name !== "string" || name === "") return void 0;
   if (typeof path !== "string" || !path.startsWith("/")) return void 0;
@@ -1143,12 +1450,12 @@ var saveAppIndex = (index2) => {
 };
 var loadAppIndex = (now = Date.now()) => {
   const file = stateFile(APPS_FILE);
-  const parsed = existsSync5(file) ? tryReadJson(file) : void 0;
-  if (isRecord2(parsed) && parsed["version"] === VERSION && Array.isArray(parsed["apps"])) {
+  const parsed = existsSync8(file) ? tryReadJson(file) : void 0;
+  if (isRecord5(parsed) && parsed["version"] === VERSION2 && Array.isArray(parsed["apps"])) {
     const generatedAt = typeof parsed["generatedAt"] === "number" ? parsed["generatedAt"] : 0;
     if (now - generatedAt <= TTL_MS) {
       return {
-        version: VERSION,
+        version: VERSION2,
         generatedAt,
         apps: parsed["apps"].map(readApp).filter((app) => app !== void 0)
       };
@@ -1164,30 +1471,30 @@ var loadAppIndex = (now = Date.now()) => {
 var appTargets = (index2) => index2.apps.map((app) => ({ kind: "app", ref: app.path, name: app.name, mtime: 0, source: "app-index" }));
 
 // src/store/docs.ts
-import { readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
-import { join as join4 } from "node:path";
+import { readdirSync as readdirSync4, statSync as statSync6 } from "node:fs";
+import { join as join6 } from "node:path";
 var MAX_FILES = 5e3;
 var statMtime = (path) => {
   try {
-    return statSync5(path).mtimeMs;
+    return statSync6(path).mtimeMs;
   } catch {
     return 0;
   }
 };
-var walk = (dir, depth, ignore, out) => {
+var walk2 = (dir, depth, ignore, out) => {
   if (depth < 0 || out.length >= MAX_FILES) return;
   let entries;
   try {
-    entries = readdirSync3(dir, { withFileTypes: true });
+    entries = readdirSync4(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
     if (out.length >= MAX_FILES) return;
     if (entry.name.startsWith(".") || ignore.includes(entry.name)) continue;
-    const path = join4(dir, entry.name);
+    const path = join6(dir, entry.name);
     if (entry.isDirectory()) {
-      walk(path, depth - 1, ignore, out);
+      walk2(path, depth - 1, ignore, out);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -1196,17 +1503,17 @@ var walk = (dir, depth, ignore, out) => {
 };
 var docTargets = (roots, ignore) => {
   const out = [];
-  for (const root of roots) walk(root.path, Math.max(0, root.depth - 1), ignore, out);
+  for (const root of roots) walk2(root.path, Math.max(0, root.depth - 1), ignore, out);
   return out;
 };
 
 // src/store/lazy.ts
-import { readdirSync as readdirSync4, statSync as statSync6 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
+import { join as join7 } from "node:path";
 var DEPTH = 2;
 var mtimeOf2 = (path) => {
   try {
-    return statSync6(path).mtimeMs;
+    return statSync7(path).mtimeMs;
   } catch {
     return 0;
   }
@@ -1215,14 +1522,14 @@ var list = (dir, depth, ignore, out) => {
   if (depth <= 0 || out.length >= LIMIT.lazyChildren) return;
   let entries;
   try {
-    entries = readdirSync4(dir, { withFileTypes: true });
+    entries = readdirSync5(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
     if (out.length >= LIMIT.lazyChildren) return;
     if (entry.name.startsWith(".") || ignore.includes(entry.name)) continue;
-    const path = join5(dir, entry.name);
+    const path = join7(dir, entry.name);
     if (entry.isFile()) {
       out.push({ kind: "file", ref: path, name: entry.name, mtime: mtimeOf2(path), source: "lazy-child" });
       continue;
@@ -1251,7 +1558,8 @@ var tier1 = (config, index2) => {
     targets: [
       ...appTargets(apps),
       ...dirTargets(index2),
-      ...docTargets(config.docRoots, config.ignore)
+      ...docTargets(config.docRoots, config.ignore),
+      ...linkTargets(loadLinkIndex(config.history), loadTaught())
     ]
   };
 };
@@ -1259,19 +1567,19 @@ var tier1b = (config, dirs) => childTargets(dirs, config.ignore);
 var rootNames = (config) => new Set([...config.roots, ...config.docRoots].map((root) => basename3(root.path).toLowerCase()));
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/indexer.js
-import { existsSync as existsSync7, readdirSync as readdirSync5, realpathSync as realpathSync3, statSync as statSync8 } from "node:fs";
-import { basename as basename4, join as join6 } from "node:path";
+import { existsSync as existsSync10, readdirSync as readdirSync6, realpathSync as realpathSync3, statSync as statSync9 } from "node:fs";
+import { basename as basename4, join as join8 } from "node:path";
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/lock.js
-import { existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync, statSync as statSync7, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync8, writeFileSync as writeFileSync2 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 var LOCK_WAIT_MS = 5;
 var LOCK_TIMEOUT_MS = 5e3;
 var INVALID_LOCK_GRACE_MS = 3e4;
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var parseLockOwner = (value) => {
-  if (!isRecord3(value))
+  if (!isRecord6(value))
     return null;
   const { pid, token, createdAt } = value;
   if (!Number.isSafeInteger(pid) || pid <= 0)
@@ -1299,7 +1607,7 @@ var processIsAlive = (pid) => {
 };
 var ageOf = (path, now) => {
   try {
-    return Math.max(0, now - statSync7(path).mtimeMs);
+    return Math.max(0, now - statSync8(path).mtimeMs);
   } catch {
     return 0;
   }
@@ -1325,7 +1633,7 @@ var quarantine = (lockDir) => {
       return false;
     throw error;
   }
-  rmSync(retired, { recursive: true, force: true });
+  rmSync2(retired, { recursive: true, force: true });
   return true;
 };
 var claimMarker = (marker) => {
@@ -1345,7 +1653,7 @@ var claimMarker = (marker) => {
       const retired = `${marker}.trash.${process.pid}.${randomUUID()}`;
       try {
         renameSync2(marker, retired);
-        rmSync(retired, { force: true });
+        rmSync2(retired, { force: true });
       } catch (renameError) {
         if (!isMissing(renameError))
           throw renameError;
@@ -1362,7 +1670,7 @@ var tryReclaim = (lockDir, ownerFile, now) => {
     return quarantine(lockDir);
   }
   if (readOwner(marker)?.token === claimant.token)
-    rmSync(marker, { force: true });
+    rmSync2(marker, { force: true });
   return false;
 };
 var release = (lockDir, ownerFile, token) => {
@@ -1378,7 +1686,7 @@ var acquire = (context) => {
     } catch (error) {
       if (!isAlreadyExists(error))
         throw error;
-      if (!existsSync6(lockDir))
+      if (!existsSync9(lockDir))
         continue;
       if (canReclaim(lockDir, ownerFile, Date.now()))
         tryReclaim(lockDir, ownerFile, Date.now());
@@ -1414,9 +1722,9 @@ var withStateLock = (stateFile2, action) => {
 import { realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute as isAbsolute3 } from "node:path";
 var PREVIOUS_INDEX_VERSION = 2;
-var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readStoredEntry = (value) => {
-  if (!isRecord4(value))
+  if (!isRecord7(value))
     return void 0;
   const { path, name, mtime, root, realPath } = value;
   if (typeof path !== "string" || !isAbsolute3(path) || !isProtocolSafePath(path))
@@ -1457,7 +1765,7 @@ var previousEntry = (value, roots) => {
 };
 var truncation = (value) => value === "entries" || value === "time" ? value : null;
 var parseIndex = (value, currentVersion) => {
-  if (!isRecord4(value) || !Array.isArray(value["entries"]))
+  if (!isRecord7(value) || !Array.isArray(value["entries"]))
     return void 0;
   const version = value["version"];
   if (version !== currentVersion && version !== PREVIOUS_INDEX_VERSION)
@@ -1480,8 +1788,8 @@ var parseIndex = (value, currentVersion) => {
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/indexer.js
 var INDEX_VERSION = 3;
-var INDEX_FILE = "index.json";
-var INDEX_TTL_MS = 60 * 60 * 1e3;
+var INDEX_FILE2 = "index.json";
+var INDEX_TTL_MS2 = 60 * 60 * 1e3;
 var MAX_ENTRIES = 5e4;
 var MAX_WALK_MS = 5e3;
 var HIDDEN_PREFIX = ".";
@@ -1494,8 +1802,8 @@ var emptyIndex = () => ({
   entries: []
 });
 var loadIndex = () => {
-  const file = stateFile(INDEX_FILE);
-  if (!existsSync7(file))
+  const file = stateFile(INDEX_FILE2);
+  if (!existsSync10(file))
     return emptyIndex();
   const loaded = parseIndex(tryReadJson(file), INDEX_VERSION);
   if (loaded === void 0)
@@ -1509,7 +1817,7 @@ var loadIndex = () => {
   return loaded.index;
 };
 var saveIndex = (index2) => {
-  withStateLock(stateFile(INDEX_FILE), () => writeAtomic(stateFile(INDEX_FILE), `${JSON.stringify(index2)}
+  withStateLock(stateFile(INDEX_FILE2), () => writeAtomic(stateFile(INDEX_FILE2), `${JSON.stringify(index2)}
 `));
 };
 var matchesConfig = (index2, config) => index2.configKey === indexConfigKey(config);
@@ -1535,14 +1843,14 @@ var canonical2 = (dir) => {
 };
 var mtimeOf3 = (dir) => {
   try {
-    return statSync8(dir).mtimeMs;
+    return statSync9(dir).mtimeMs;
   } catch {
     return 0;
   }
 };
 var isDirectoryPath = (path) => {
   try {
-    return statSync8(path).isDirectory();
+    return statSync9(path).isDirectory();
   } catch {
     return false;
   }
@@ -1550,13 +1858,13 @@ var isDirectoryPath = (path) => {
 var listDirs = (dir, ignore) => {
   let entries;
   try {
-    entries = readdirSync5(dir, { withFileTypes: true }).filter((d) => d.isDirectory() || d.isSymbolicLink()).map((d) => ({ name: d.name, link: d.isSymbolicLink() }));
+    entries = readdirSync6(dir, { withFileTypes: true }).filter((d) => d.isDirectory() || d.isSymbolicLink()).map((d) => ({ name: d.name, link: d.isSymbolicLink() }));
   } catch {
     return [];
   }
-  return entries.filter((entry) => !shouldSkip(entry.name, ignore)).map((entry) => ({ path: join6(dir, entry.name), link: entry.link })).filter((entry) => !entry.link || isDirectoryPath(entry.path)).map((entry) => entry.path);
+  return entries.filter((entry) => !shouldSkip(entry.name, ignore)).map((entry) => ({ path: join8(dir, entry.name), link: entry.link })).filter((entry) => !entry.link || isDirectoryPath(entry.path)).map((entry) => entry.path);
 };
-var walk2 = (dir, depth, root, state) => {
+var walk3 = (dir, depth, root, state) => {
   if (depth > root.depth)
     return;
   if (shouldStop(state))
@@ -1569,7 +1877,7 @@ var walk2 = (dir, depth, root, state) => {
       continue;
     state.seen.add(real);
     state.entries.push({ path: child, name: basename4(child), mtime: mtimeOf3(child), root: root.path, realPath: real });
-    walk2(child, depth + 1, root, state);
+    walk3(child, depth + 1, root, state);
   }
 };
 var buildIndex = (config, now = Date.now(), limits = DEFAULT_LIMITS) => {
@@ -1583,14 +1891,14 @@ var buildIndex = (config, now = Date.now(), limits = DEFAULT_LIMITS) => {
     truncated: null
   };
   for (const root of config.roots) {
-    if (!existsSync7(root.path))
+    if (!existsSync10(root.path))
       continue;
     const real = canonical2(root.path);
     if (real === void 0)
       continue;
     state.canonicalRoot = real;
     state.seen.add(real);
-    walk2(root.path, 1, root, state);
+    walk3(root.path, 1, root, state);
   }
   return {
     version: INDEX_VERSION,
@@ -1607,7 +1915,7 @@ var refreshIndex = (config, now = Date.now()) => {
 };
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/visits.js
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/frecency.js
 var HOUR_SECONDS = 3600;
@@ -1639,10 +1947,10 @@ var applyAging = (records) => records.map((r) => ({ ...r, visits: r.visits * AGI
 // node_modules/@franzenzenhofer/intent-core/dist/store/db-records.js
 import { isAbsolute as isAbsolute4, resolve as resolve3 } from "node:path";
 var MAX_DB_RECORDS = 1e4;
-var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord8 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var absolutePath = (value) => isAbsolute4(value) && isProtocolSafePath(value);
 var readVisitRecord = (value, isIdentity2 = absolutePath) => {
-  if (!isRecord5(value))
+  if (!isRecord8(value))
     return void 0;
   const { path, realPath, visits, lastVisit } = value;
   if (typeof path !== "string" || !isIdentity2(path))
@@ -1662,7 +1970,7 @@ var boundedRecords = (records) => [...records].sort((a, b) => b.lastVisit - a.la
 // node_modules/@franzenzenhofer/intent-core/dist/store/visits.js
 var DB_VERSION = 3;
 var VISIT_INCREMENT = 1;
-var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord9 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var identityOf = (spec) => spec.isIdentity ?? absolutePath;
 var emptyVisits = () => ({ version: DB_VERSION, records: [] });
 var checkVersion = (version) => {
@@ -1675,10 +1983,10 @@ var checkVersion = (version) => {
 };
 var loadVisits = (spec) => {
   const path = spec.file();
-  if (!existsSync8(path))
+  if (!existsSync11(path))
     return emptyVisits();
   const parsed = tryReadJson(path);
-  if (!isRecord6(parsed) || !Array.isArray(parsed["records"]))
+  if (!isRecord9(parsed) || !Array.isArray(parsed["records"]))
     return emptyVisits();
   if (!checkVersion(parsed["version"]))
     return emptyVisits();
@@ -1808,8 +2116,12 @@ var parentPath = (path) => {
   const idx = path.lastIndexOf("/");
   return idx <= 0 ? "" : path.slice(0, idx);
 };
+var nameScoreOf = (token, target) => {
+  const names = target.aka === void 0 ? [target.name] : [target.name, ...target.aka];
+  return Math.max(...names.map((name) => matchName(token, name, MATCH)));
+};
 var tokenScore = (token, target) => {
-  const nameScore = matchName(token, target.name, MATCH);
+  const nameScore = nameScoreOf(token, target);
   if (nameScore > SCORE.none) return nameScore;
   if (target.kind === "url") {
     return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
@@ -1819,32 +2131,32 @@ var tokenScore = (token, target) => {
   if (parentScore > SCORE.none) return Math.max(SCORE.pathOnly, Math.round(parentScore * PARENT_SHARE));
   return parent.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
-var dirCandidates = (query, targets) => targets.filter((target) => target.kind === "dir").map((target) => ({
+var dirCandidates = (query2, targets) => targets.filter((target) => target.kind === "dir").map((target) => ({
   ref: target.ref,
-  score: Math.max(...query.tokens.map((token) => matchName(token, target.name, MATCH)))
+  score: Math.max(...query2.tokens.map((token) => matchName(token, target.name, MATCH)))
 })).filter((scored) => scored.score >= SCORE.wordBoundary).sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref)).slice(0, LIMIT.lazyParents).map((scored) => scored.ref);
-var passesFilters = (query, target) => {
+var passesFilters = (query2, target) => {
   const lower = target.ref.toLowerCase();
-  if (query.targetKinds.length > 0 && !query.targetKinds.includes(target.kind)) return false;
-  if (!query.years.every((year) => lower.includes(year))) return false;
-  if (!query.within.every((folder) => lower.includes(folder))) return false;
-  if (query.scope !== null && !lower.includes(query.scope.toLowerCase())) return false;
-  if (query.kinds.length === 0) return true;
+  if (query2.targetKinds.length > 0 && !query2.targetKinds.includes(target.kind)) return false;
+  if (!query2.years.every((year) => lower.includes(year))) return false;
+  if (!query2.within.every((folder) => lower.includes(folder))) return false;
+  if (query2.scope !== null && !lower.includes(query2.scope.toLowerCase())) return false;
+  if (query2.kinds.length === 0) return true;
   if (target.kind !== "file") return true;
-  return query.kinds.some((kind) => matchesKind(target.ref, kind));
+  return query2.kinds.some((kind) => matchesKind(target.ref, kind));
 };
-var matchQuality = (query, target) => {
-  if (!passesFilters(query, target) || query.tokens.length === 0) return SCORE.none;
+var matchQuality = (query2, target) => {
+  if (!passesFilters(query2, target) || query2.tokens.length === 0) return SCORE.none;
   let sum = 0;
-  for (const token of query.tokens) {
+  for (const token of query2.tokens) {
     const single = tokenScore(token, target);
     if (single === SCORE.none) return SCORE.none;
     sum += single;
   }
-  return sum / query.tokens.length;
+  return sum / query2.tokens.length;
 };
-var brevityBonus = (query, target) => {
-  const queried = query.tokens.reduce((sum, token) => sum + token.length, 0);
+var brevityBonus = (query2, target) => {
+  const queried = query2.tokens.reduce((sum, token) => sum + token.length, 0);
   if (queried === 0 || target.name.length === 0) return 0;
   return BONUS.brevity * Math.min(1, queried / target.name.length);
 };
@@ -1853,34 +2165,34 @@ var recencyBonus = (target, nowMs) => {
   const days = Math.max(0, (nowMs - target.mtime) / DAY_MS);
   return BONUS.recency / (1 + days / RECENCY_HALF_LIFE_DAYS);
 };
-var kindBonus = (query, target) => {
-  if (query.kinds.length === 0 || target.kind !== "file") return 0;
-  return query.kinds.some((kind) => matchesKind(target.ref, kind)) ? BONUS.kindMatch : 0;
+var kindBonus = (query2, target) => {
+  if (query2.kinds.length === 0 || target.kind !== "file") return 0;
+  return query2.kinds.some((kind) => matchesKind(target.ref, kind)) ? BONUS.kindMatch : 0;
 };
-var appBonus = (query, target) => {
-  if (target.kind !== "app" || query.tokens.length !== 1) return 0;
-  return target.name.toLowerCase() === query.tokens[0] ? BONUS.appExact : 0;
+var appBonus = (query2, target) => {
+  if (target.kind !== "app" || query2.tokens.length !== 1) return 0;
+  return target.name.toLowerCase() === query2.tokens[0] ? BONUS.appExact : 0;
 };
-var contextualScore = (query, target, context, quality) => {
+var contextualScore = (query2, target, context, quality) => {
   const under = target.kind !== "url" && target.ref !== context.cwd && target.ref.startsWith(`${context.cwd}/`) ? BONUS.underCwd : 0;
-  return quality + frecencyBonus(context.frecency.get(target.ref) ?? 0, BONUS.frecency) + under + brevityBonus(query, target) + recencyBonus(target, context.nowMs) + kindBonus(query, target) + appBonus(query, target);
+  return quality + frecencyBonus(context.frecency.get(target.ref) ?? 0, BONUS.frecency) + under + brevityBonus(query2, target) + recencyBonus(target, context.nowMs) + kindBonus(query2, target) + appBonus(query2, target);
 };
 
 // src/match/resolve.ts
 var pathOf = (target) => target.ref;
-var rankTargets = (query, targets, context) => {
+var rankTargets = (query2, targets, context) => {
   const ranked = rank(
     targets,
     (target) => {
-      const quality = matchQuality(query, target);
+      const quality = matchQuality(query2, target);
       if (quality === SCORE.none) return null;
-      return { quality, score: contextualScore(query, target, context, quality) };
+      return { quality, score: contextualScore(query2, target, context, quality) };
     },
     (a, b) => a.ref.localeCompare(b.ref)
   );
   return collapseChains(ranked, pathOf);
 };
-var applyOrder = (query, ranked) => {
+var applyOrder = (query2, ranked) => {
   const best = ranked[0];
   if (best === void 0) return { kind: "unsure", candidates: [] };
   if (best.quality < ORDERED_HIT) return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiTargets) };
@@ -1888,22 +2200,22 @@ var applyOrder = (query, ranked) => {
     ranked.filter((scored) => scored.quality >= best.quality - THRESHOLD.gap),
     pathOf
   );
-  const newest = query.order === "latest";
+  const newest = query2.order === "latest";
   const chosen = [...pool].sort((a, b) => newest ? b.item.mtime - a.item.mtime : a.item.mtime - b.item.mtime)[0];
   return chosen === void 0 ? { kind: "unsure", candidates: ranked } : { kind: "hit", item: chosen.item, score: chosen.score };
 };
-var decideTargets = (query, ranked) => query.order === "none" ? decide(ranked, THRESHOLD) : applyOrder(query, ranked);
+var decideTargets = (query2, ranked) => query2.order === "none" ? decide(ranked, THRESHOLD) : applyOrder(query2, ranked);
 
 // src/store/spotlight.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync9, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { spawnSync as spawnSync3 } from "node:child_process";
+import { existsSync as existsSync12, readdirSync as readdirSync7, statSync as statSync10 } from "node:fs";
 import { basename as basename6 } from "node:path";
 var MDFIND = "/usr/bin/mdfind";
 var PROBE_FILE = "spotlight.json";
 var PROBE_TTL_MS = 24 * 60 * 60 * 1e3;
 var QUERY_TIMEOUT_MS = 1500;
 var PROBE_TIMEOUT_MS = 2e3;
-var MAX_BUFFER = 8 * 1024 * 1024;
+var MAX_BUFFER2 = 8 * 1024 * 1024;
 var MIN_TOKEN = 2;
 var MAX_TOKEN = 64;
 var PROBE_NAMES = 3;
@@ -1914,11 +2226,11 @@ var buildQuery = (tokens) => {
   return clauses.length === 0 ? null : clauses.join(" && ");
 };
 var runMdfind = (args, timeoutMs) => {
-  if (!existsSync9(MDFIND)) return null;
-  const result = spawnSync2(MDFIND, args, {
+  if (!existsSync12(MDFIND)) return null;
+  const result = spawnSync3(MDFIND, args, {
     encoding: "utf8",
     timeout: timeoutMs,
-    maxBuffer: MAX_BUFFER
+    maxBuffer: MAX_BUFFER2
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   return result.stdout;
@@ -1926,7 +2238,7 @@ var runMdfind = (args, timeoutMs) => {
 var probeRoot = (root) => {
   let names;
   try {
-    names = readdirSync6(root);
+    names = readdirSync7(root);
   } catch {
     return false;
   }
@@ -1939,18 +2251,18 @@ var probeRoot = (root) => {
     return out !== null && Number.parseInt(out.trim(), 10) > 0;
   });
 };
-var VERSION2 = 1;
+var VERSION3 = 1;
 var readCache = (now) => {
   const parsed = tryReadJson(stateFile(PROBE_FILE));
   if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
     const record = parsed;
     const generatedAt = typeof record["generatedAt"] === "number" ? record["generatedAt"] : 0;
     const roots = record["roots"];
-    if (record["version"] === VERSION2 && now - generatedAt <= PROBE_TTL_MS && typeof roots === "object" && roots !== null) {
-      return { version: VERSION2, generatedAt, roots };
+    if (record["version"] === VERSION3 && now - generatedAt <= PROBE_TTL_MS && typeof roots === "object" && roots !== null) {
+      return { version: VERSION3, generatedAt, roots };
     }
   }
-  return { version: VERSION2, generatedAt: now, roots: {} };
+  return { version: VERSION3, generatedAt: now, roots: {} };
 };
 var spotlightCoverage = (roots, now = Date.now()) => {
   const cache = readCache(now);
@@ -1965,7 +2277,7 @@ var spotlightCoverage = (roots, now = Date.now()) => {
     try {
       writeAtomic(
         stateFile(PROBE_FILE),
-        `${JSON.stringify({ version: VERSION2, generatedAt: cache.generatedAt, roots: known2 })}
+        `${JSON.stringify({ version: VERSION3, generatedAt: cache.generatedAt, roots: known2 })}
 `
       );
     } catch {
@@ -1976,7 +2288,7 @@ var spotlightCoverage = (roots, now = Date.now()) => {
 var indexedRoots = (roots, now = Date.now()) => spotlightCoverage(roots, now).filter((one) => one.indexed).map((one) => one.root);
 var targetOf = (path) => {
   try {
-    const stats = statSync9(path);
+    const stats = statSync10(path);
     return {
       kind: stats.isDirectory() ? /\.app$/iu.test(path) ? "app" : "dir" : "file",
       ref: path,
@@ -1989,12 +2301,12 @@ var targetOf = (path) => {
   }
 };
 var spotlightTargets = (tokens, roots, now = Date.now()) => {
-  const query = buildQuery(tokens);
-  if (query === null) return [];
+  const query2 = buildQuery(tokens);
+  if (query2 === null) return [];
   const found = [];
   const seen = /* @__PURE__ */ new Set();
   for (const root of indexedRoots(roots, now)) {
-    const out = runMdfind(["-onlyin", root, query], QUERY_TIMEOUT_MS);
+    const out = runMdfind(["-onlyin", root, query2], QUERY_TIMEOUT_MS);
     if (out === null) continue;
     for (const line3 of out.split("\n")) {
       if (line3 === "" || seen.has(line3) || found.length >= LIMIT.spotlight) continue;
@@ -2031,71 +2343,37 @@ var freshIndex = (config) => {
   const index2 = loadIndex();
   return matchesConfig(index2, config) ? index2 : refreshIndex(config);
 };
-var bestReading = (query, targets, context) => {
-  let fallback = { ranked: [], query };
-  for (const reading of readings(query)) {
+var bestReading = (query2, targets, context) => {
+  let fallback = { ranked: [], query: query2 };
+  for (const reading of readings(query2)) {
     const ranked = rankTargets(reading, targets, context);
     if (ranked.length > 0) return { ranked, query: reading };
     if (fallback.ranked.length === 0) fallback = { ranked, query: reading };
   }
   return fallback;
 };
-var deterministicPool = (query, config, context) => {
+var deterministicPool = (query2, config, context) => {
   const targets = [...tier1(config, freshIndex(config)).targets];
-  let attempt = bestReading(query, targets, context);
+  let attempt = bestReading(query2, targets, context);
   const expanded = tier1b(config, dirCandidates(attempt.query, targets));
   if (expanded.length === 0) return { targets, attempt };
   targets.push(...expanded);
-  attempt = bestReading(query, targets, context);
+  attempt = bestReading(query2, targets, context);
   return { targets, attempt };
 };
-var rescan = (query, pool, config, context) => {
+var rescan = (query2, pool, config, context) => {
   const rescanned = tier1(config, refreshIndex(config)).targets;
   const lazy = pool.targets.filter((target) => target.source === "lazy-child");
   const targets = [...rescanned, ...lazy];
-  return { targets, attempt: bestReading(query, targets, context) };
+  return { targets, attempt: bestReading(query2, targets, context) };
 };
-var spotlightPool = (query, pool, context) => {
-  const found = spotlightTargets([...query.tokens, ...query.years], context.roots);
+var spotlightPool = (query2, pool, context) => {
+  const found = spotlightTargets([...query2.tokens, ...query2.years], context.roots);
   if (found.length === 0) return pool;
   const targets = [...pool.targets, ...found];
-  return { targets, attempt: bestReading(query, targets, context) };
+  return { targets, attempt: bestReading(query2, targets, context) };
 };
 var decideFrom = (attempt) => decideTargets(attempt.query, attempt.ranked);
-
-// src/ai/sanitize.ts
-var LYING = [
-  [0, 31],
-  [127, 159],
-  // C0 and C1 controls
-  [173, 173],
-  // soft hyphen
-  [8203, 8207],
-  // zero width, and the LTR/RTL marks
-  [8234, 8238],
-  // bidi embeddings and overrides
-  [8288, 8292],
-  [8294, 8297],
-  // word joiner, invisible operators, bidi isolates
-  [65279, 65279],
-  // byte order mark
-  [65024, 65039],
-  // variation selectors
-  [57344, 63743],
-  // private use area
-  [917504, 917631],
-  // the tag block: invisible instruction carrier
-  [983040, 1114109]
-  // supplementary private use areas
-];
-var lies = (codePoint) => LYING.some(([low, high]) => codePoint >= low && codePoint <= high);
-var ELLIPSIS = "\u2026";
-var sanitizeLabel = (text, max) => {
-  const kept = [...text.normalize("NFC")].filter((char) => !lies(char.codePointAt(0) ?? 0)).join("");
-  const flattened = kept.replace(/\s+/gu, " ").trim();
-  const graphemes = [...flattened];
-  return graphemes.length <= max ? flattened : `${graphemes.slice(0, max - 1).join("")}${ELLIPSIS}`;
-};
 
 // src/display.ts
 var MAX_LABEL = 120;
@@ -2103,9 +2381,10 @@ var displayPath = (path) => sanitizeLabel(contractTilde(path), MAX_LABEL);
 var displayTarget = (target) => target.kind === "url" ? sanitizeLabel(target.ref, MAX_LABEL) : displayPath(target.ref);
 
 // src/act/argv.ts
-var handlerArgs = (handler) => {
-  if (handler.kind === "app") return ["-a", handler.appPath];
-  if (handler.kind === "bundleId") return ["-b", handler.bundleId];
+var handlerArgs = (plan) => {
+  if (plan.reveal) return [];
+  if (plan.handler.kind === "app") return ["-a", plan.handler.appPath];
+  if (plan.handler.kind === "bundleId") return ["-b", plan.handler.bundleId];
   return [];
 };
 var flags = (plan) => [
@@ -2115,7 +2394,7 @@ var flags = (plan) => [
   ...plan.wait && !plan.background ? ["-W"] : []
 ];
 var buildOpenArgv = (plan) => {
-  const head = [...flags(plan), ...handlerArgs(plan.handler)];
+  const head = [...flags(plan), ...handlerArgs(plan)];
   if (plan.target.kind === "url") return [...head, "-u", plan.target.url];
   return [...head, "--", plan.target.path];
 };
@@ -2221,11 +2500,11 @@ var granted = (assessed, plan) => {
 };
 
 // src/risk/bundle.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
-import { join as join7 } from "node:path";
+import { spawnSync as spawnSync4 } from "node:child_process";
+import { join as join9 } from "node:path";
 var PLUTIL = "/usr/bin/plutil";
-var TIMEOUT_MS = 3e3;
-var MAX_BUFFER2 = 1024 * 1024;
+var TIMEOUT_MS2 = 3e3;
+var MAX_BUFFER3 = 1024 * 1024;
 var TERMINAL_IDS = /* @__PURE__ */ new Set([
   "com.apple.terminal",
   "com.googlecode.iterm2",
@@ -2265,22 +2544,22 @@ var EDITOR_IDS = /* @__PURE__ */ new Set([
 ]);
 var VIEWER_IDS = /* @__PURE__ */ new Set(["com.apple.preview", "com.apple.quicktimeplayerx", "org.videolan.vlc"]);
 var SHELL_ROLE = "shell";
-var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord10 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var hasShellRole = (info) => {
   const types = info["CFBundleDocumentTypes"];
   if (!Array.isArray(types)) return false;
   return types.some((entry) => {
-    if (!isRecord7(entry)) return false;
+    if (!isRecord10(entry)) return false;
     const role = entry["CFBundleTypeRole"];
     return typeof role === "string" && role.toLowerCase() === SHELL_ROLE;
   });
 };
 var readInfo = (appPath) => {
-  const plist = join7(appPath, "Contents", "Info.plist");
-  const result = spawnSync3(PLUTIL, ["-convert", "json", "-o", "-", "--", plist], {
+  const plist = join9(appPath, "Contents", "Info.plist");
+  const result = spawnSync4(PLUTIL, ["-convert", "json", "-o", "-", "--", plist], {
     encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: MAX_BUFFER2
+    timeout: TIMEOUT_MS2,
+    maxBuffer: MAX_BUFFER3
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   let parsed;
@@ -2289,7 +2568,7 @@ var readInfo = (appPath) => {
   } catch {
     return null;
   }
-  if (!isRecord7(parsed)) return null;
+  if (!isRecord10(parsed)) return null;
   const id = parsed["CFBundleIdentifier"];
   return {
     id: typeof id === "string" ? id : "",
@@ -2313,8 +2592,8 @@ var handlerKind = (appPath, bundleId) => {
 };
 
 // src/risk/classify.ts
-import { closeSync as closeSync2, lstatSync as lstatSync2, openSync as openSync2, readSync as readSync2, statSync as statSync10 } from "node:fs";
-import { basename as basename7, extname as extname2, join as join8 } from "node:path";
+import { closeSync as closeSync2, lstatSync as lstatSync2, openSync as openSync2, readSync as readSync2, statSync as statSync11 } from "node:fs";
+import { basename as basename7, extname as extname2, join as join10 } from "node:path";
 
 // src/risk/classes.ts
 var BUNDLE_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -2494,7 +2773,7 @@ var readMagic = (path) => {
 var directoryClass = (path) => {
   const extension = extensionOf(path);
   try {
-    if (statSync10(join8(path, "Contents", "MacOS")).isDirectory()) return "application";
+    if (statSync11(join10(path, "Contents", "MacOS")).isDirectory()) return "application";
   } catch {
   }
   if (extension === "app") return "application";
@@ -2539,7 +2818,7 @@ var classifyPath = (path, roots) => {
   const realPath = realPathOr(path);
   let stats;
   try {
-    stats = statSync10(path);
+    stats = statSync11(path);
   } catch {
     return { ...missing(path), isSymlink: link.isSymbolicLink() };
   }
@@ -2559,16 +2838,16 @@ var classifyPath = (path, roots) => {
 };
 
 // src/risk/locator.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
+import { spawnSync as spawnSync5 } from "node:child_process";
 var PLUTIL2 = "/usr/bin/plutil";
-var TIMEOUT_MS2 = 2e3;
-var MAX_BUFFER3 = 64 * 1024;
+var TIMEOUT_MS3 = 2e3;
+var MAX_BUFFER4 = 64 * 1024;
 var MAX_URL2 = 2048;
 var locatorUrl = (path) => {
-  const result = spawnSync4(PLUTIL2, ["-extract", "URL", "raw", "-o", "-", "--", path], {
+  const result = spawnSync5(PLUTIL2, ["-extract", "URL", "raw", "-o", "-", "--", path], {
     encoding: "utf8",
-    timeout: TIMEOUT_MS2,
-    maxBuffer: MAX_BUFFER3
+    timeout: TIMEOUT_MS3,
+    maxBuffer: MAX_BUFFER4
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   const url = result.stdout.trim();
@@ -2606,7 +2885,8 @@ var baseConsent = (assessment) => assessment.subject.kind === "path" ? CLASS_BAS
 var runsCode = (subject) => subject.kind === "path" && !INERT.has(subject.klass);
 var contextual = (assessment, from) => {
   let level = from;
-  if (assessment.subject.kind === "url" && assessment.origin !== "literal") level = bump(level);
+  const typed = assessment.origin === "literal" || assessment.origin === "alias";
+  if (assessment.subject.kind === "url" && !typed) level = bump(level);
   if (assessment.quarantined) {
     if (runsCode(assessment.subject)) return "refuse";
     level = bump(level);
@@ -2637,11 +2917,11 @@ var requiredConsent = (assessment) => {
 var consentRank = index;
 
 // src/risk/quarantine.ts
-import { spawnSync as spawnSync5 } from "node:child_process";
+import { spawnSync as spawnSync6 } from "node:child_process";
 var XATTR = "/usr/bin/xattr";
 var ATTRIBUTE = "com.apple.quarantine";
-var TIMEOUT_MS3 = 2e3;
-var MAX_BUFFER4 = 8192;
+var TIMEOUT_MS4 = 2e3;
+var MAX_BUFFER5 = 8192;
 var USER_APPROVED = 64;
 var parseQuarantine = (raw) => {
   const trimmed = raw.trim();
@@ -2659,45 +2939,13 @@ var parseQuarantine = (raw) => {
   };
 };
 var readQuarantine = (path) => {
-  const result = spawnSync5(XATTR, ["-p", ATTRIBUTE, "--", path], {
+  const result = spawnSync6(XATTR, ["-p", ATTRIBUTE, "--", path], {
     encoding: "utf8",
-    timeout: TIMEOUT_MS3,
-    maxBuffer: MAX_BUFFER4
+    timeout: TIMEOUT_MS4,
+    maxBuffer: MAX_BUFFER5
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   return parseQuarantine(result.stdout);
-};
-
-// src/risk/scheme.ts
-var FORBIDDEN = /* @__PURE__ */ new Set(["javascript", "data", "vbscript", "about", "blob", "view-source"]);
-var WEB = /* @__PURE__ */ new Set(["http", "https"]);
-var MESSAGE = /* @__PURE__ */ new Set(["mailto", "tel", "sms", "facetime", "facetime-audio", "imessage"]);
-var APPLE = /* @__PURE__ */ new Set(["macappstore", "macappstores", "itms", "itmss", "itms-apps", "prefs"]);
-var APPLE_PREFIX = "x-apple-";
-var classifyScheme = (scheme2) => {
-  const lower = scheme2.toLowerCase().replace(/:$/u, "");
-  if (FORBIDDEN.has(lower)) return "forbidden";
-  if (WEB.has(lower)) return "web";
-  if (lower === "file") return "file";
-  if (MESSAGE.has(lower)) return "message";
-  if (APPLE.has(lower) || lower.startsWith(APPLE_PREFIX)) return "apple";
-  return "custom";
-};
-var parseUrl = (text) => {
-  if (/[\r\n]/u.test(text)) return null;
-  let url;
-  try {
-    url = new URL(text);
-  } catch {
-    return null;
-  }
-  const scheme2 = url.protocol.replace(/:$/u, "").toLowerCase();
-  return {
-    url,
-    scheme: scheme2,
-    klass: classifyScheme(scheme2),
-    hasUserInfo: url.username !== "" || url.password !== ""
-  };
 };
 
 // src/risk/assess.ts
@@ -2911,10 +3159,10 @@ var timeoutFailure = (plan) => {
 };
 
 // src/act/run.ts
-var TIMEOUT_MS4 = 1e4;
+var TIMEOUT_MS5 = 1e4;
 var MAX_OUTPUT_BYTES = 64 * 1024;
 var MAX_STDERR_BYTES = 4096;
-var openTimeoutMs = (plan) => plan.action.wait ? Number.POSITIVE_INFINITY : TIMEOUT_MS4;
+var openTimeoutMs = (plan) => plan.action.wait ? Number.POSITIVE_INFINITY : TIMEOUT_MS5;
 var childEnv = (env = process.env) => {
   const prefix = `${product().envPrefix}_`;
   const clean = {};
@@ -3065,16 +3313,23 @@ var act = async (input) => {
 };
 
 // src/commands/query.ts
-var buildAction = (query, target, handler, options) => ({
+var buildAction = (query2, target, handler, options) => ({
   target,
   handler,
-  newInstance: query.newInstance || options.newInstance,
-  background: query.background || options.background,
-  reveal: query.reveal || options.reveal,
+  newInstance: query2.newInstance || options.newInstance,
+  background: query2.background || options.background,
+  reveal: query2.reveal || options.reveal,
   wait: options.wait
 });
-var suggest = (query, guesses, config) => {
-  fail(`no match for "${query.raw}"`);
+var taughtTarget = (query2) => {
+  if (query2.tokens.length !== 1) return null;
+  const word = query2.tokens[0];
+  const link = loadTaught().find((taught) => taught.name === word);
+  if (link === void 0) return null;
+  return { kind: "url", ref: link.url, name: link.name, mtime: link.addedAt, source: "link-index" };
+};
+var suggest = (query2, guesses, config) => {
+  fail(`no match for "${query2.raw}"`);
   for (const guess of guesses.slice(0, LIMIT.suggestions)) {
     process.stderr.write(`        ${displayTarget(guess.item)}
 `);
@@ -3100,15 +3355,15 @@ var answered = (decision) => {
     resolved: { target, score: decision.kind === "hit" ? decision.score : 0, origin: "deterministic" }
   };
 };
-var resolve4 = (query, config, context) => {
-  let pool = deterministicPool(query, config, context);
+var resolve4 = (query2, config, context) => {
+  let pool = deterministicPool(query2, config, context);
   let decision = decideFrom(pool.attempt);
   if (decision.kind === "unsure") {
-    pool = rescan(query, pool, config, context);
+    pool = rescan(query2, pool, config, context);
     decision = decideFrom(pool.attempt);
   }
   if (decision.kind === "unsure") {
-    pool = spotlightPool(query, pool, context);
+    pool = spotlightPool(query2, pool, context);
     decision = decideFrom(pool.attempt);
   }
   if (decision.kind !== "unsure") return answered(decision);
@@ -3119,13 +3374,13 @@ var understand = (args, config, options) => {
   const apps = tier1(config, { version: 0, generatedAt: 0, configKey: "", truncated: null, entries: [] }).apps;
   const names = rootNames(config);
   const withWord = options.withWord ?? parsed.withWord;
-  const query = resolveIn(
+  const query2 = resolveIn(
     { ...parsed, withWord, handlerWord: withWord, handlerExplicit: withWord !== null },
-    (word) => names.has(word) || existsSync10(word),
+    (word) => names.has(word) || existsSync13(word),
     (word) => apps.apps.some((app) => app.name.toLowerCase().startsWith(word))
   );
-  const handler = resolveHandler({ query, apps: apps.apps, rules: config.handlers });
-  if (handler.kind === "handler") return { query, handler: handler.handler };
+  const handler = resolveHandler({ query: query2, apps: apps.apps, rules: config.handlers });
+  if (handler.kind === "handler") return { query: query2, handler: handler.handler };
   const closest = handler.closest.length === 0 ? "nothing like it is installed" : `closest: ${handler.closest.join(", ")}`;
   return fail(`no application matches "${handler.word}"`, closest), EXIT.noMatch;
 };
@@ -3136,9 +3391,9 @@ var runQuery = async (args, options) => {
   const config = loadConfig();
   const understood = understand(args, config, options);
   if (typeof understood === "number") return understood;
-  const { query, handler } = understood;
+  const { query: query2, handler } = understood;
   const run2 = (target2, score2, origin2) => act({
-    action: buildAction(query, target2, handler, options),
+    action: buildAction(query2, target2, handler, options),
     origin: origin2,
     roots: allRoots(config),
     score: score2,
@@ -3147,12 +3402,14 @@ var runQuery = async (args, options) => {
   });
   const literal = literalTarget(args);
   if (literal !== null) return run2(literal, LITERAL_SCORE, "literal");
+  const taught = taughtTarget(query2);
+  if (taught !== null) return run2(taught, LITERAL_SCORE, "alias");
   if (config.roots.length === 0 && config.docRoots.length === 0) {
     return fail("no roots configured", "run `openit setup` once to pick what to learn"), EXIT.error;
   }
-  const resolution = resolve4(query, config, scoreContext(config));
+  const resolution = resolve4(query2, config, scoreContext(config));
   if (resolution.kind === "declined") return EXIT.declined;
-  if (resolution.kind === "none") return suggest(query, resolution.guesses, config);
+  if (resolution.kind === "none") return suggest(query2, resolution.guesses, config);
   const { target, score, origin } = resolution.resolved;
   return run2(target, score, origin);
 };
@@ -3207,21 +3464,21 @@ var resolveAiBackend = (ai, resolveCommand = resolveExecutable) => {
 var backendLabel = (target) => target.model === "" ? target.kind : `${target.kind} ${target.model}`;
 
 // src/commands/detect.ts
-import { existsSync as existsSync11, readdirSync as readdirSync7, statSync as statSync11 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync14, readdirSync as readdirSync8, statSync as statSync12 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join11 } from "node:path";
 var PROJECT_DIRS = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
 var DOC_DIRS = [
   ["Downloads", 1],
   ["Desktop", 1],
   ["Documents", 2],
-  [join9("Pictures", "Screenshots"), 1]
+  [join11("Pictures", "Screenshots"), 1]
 ];
 var CLOUD_PATTERN = /dropbox|onedrive|nextcloud|owncloud|drive|icloud/iu;
-var CLOUD_PATHS = [join9("Library", "CloudStorage")];
-var isDir = (path) => {
+var CLOUD_PATHS = [join11("Library", "CloudStorage")];
+var isDir2 = (path) => {
   try {
-    return existsSync11(path) && statSync11(path).isDirectory();
+    return existsSync14(path) && statSync12(path).isDirectory();
   } catch {
     return false;
   }
@@ -3229,21 +3486,21 @@ var isDir = (path) => {
 var cloudDirs = (home) => {
   let names = [];
   try {
-    names = readdirSync7(home);
+    names = readdirSync8(home);
   } catch {
     return [];
   }
-  const matched = names.filter((name) => !name.startsWith(".") && CLOUD_PATTERN.test(name)).map((name) => join9(home, name));
-  return [...matched, ...CLOUD_PATHS.map((name) => join9(home, name))].filter(isDir);
+  const matched = names.filter((name) => !name.startsWith(".") && CLOUD_PATTERN.test(name)).map((name) => join11(home, name));
+  return [...matched, ...CLOUD_PATHS.map((name) => join11(home, name))].filter(isDir2);
 };
 var detectRoots = () => {
-  const home = homedir3();
-  const found = PROJECT_DIRS.map((name) => join9(home, name)).filter(isDir);
+  const home = homedir4();
+  const found = PROJECT_DIRS.map((name) => join11(home, name)).filter(isDir2);
   return [...found, ...cloudDirs(home)].map((path) => ({ path, depth: DEFAULT_DEPTH }));
 };
 var detectDocRoots = () => {
-  const home = homedir3();
-  return DOC_DIRS.map(([name, depth]) => ({ path: join9(home, name), depth })).filter((root) => isDir(root.path));
+  const home = homedir4();
+  return DOC_DIRS.map(([name, depth]) => ({ path: join11(home, name), depth })).filter((root) => isDir2(root.path));
 };
 
 // src/commands/setup.ts
@@ -3326,7 +3583,7 @@ var runSetup = (args) => {
 };
 
 // src/commands/doctor.ts
-import { existsSync as existsSync12 } from "node:fs";
+import { existsSync as existsSync15 } from "node:fs";
 var say = (label, value) => note(`  ${label.padEnd(12)} ${value}`);
 var opener = () => {
   const bin = resolveOpenBin();
@@ -3340,7 +3597,7 @@ var runDoctor = () => {
   const config = loadConfig();
   note("openit doctor");
   say("node", process.version);
-  say("config", `${contractTilde(configFile())}${existsSync12(configFile()) ? "" : " (not written yet)"}`);
+  say("config", `${contractTilde(configFile())}${existsSync15(configFile()) ? "" : " (not written yet)"}`);
   say("data", contractTilde(dataDir()));
   say("private", hasPrivateMode(dataDir(), true) ? "yes (0700)" : "no - run any openit command to tighten");
   opener();
@@ -3350,6 +3607,8 @@ var runDoctor = () => {
   say("index", `${String(index2.entries.length)} directories${index2.truncated === null ? "" : ` (truncated: ${index2.truncated})`}`);
   say("files", String(docTargets(config.docRoots, config.ignore).length));
   say("apps", String(loadAppIndex().apps.length));
+  say("links", `${String(loadLinkIndex(config.history).length)} indexed, ${String(loadTaught().length)} taught`);
+  say("browsing", config.history ? "history read (opt in)" : "history not read");
   for (const one of spotlightCoverage(allRoots(config))) {
     say("spotlight", `${contractTilde(one.root)} ${one.indexed ? "indexed" : "NOT indexed - openit cannot search it beyond its own index"}`);
   }
@@ -3372,18 +3631,82 @@ var runIndex = (args) => {
   const apps = refresh ? buildAppIndex() : loadAppIndex();
   if (refresh) saveAppIndex(apps);
   const docs = docTargets(config.docRoots, config.ignore);
+  const links = refresh ? buildLinkIndex(config.history) : loadLinkIndex(config.history);
+  if (refresh) saveLinkIndex(links);
   note(`openit: ${String(index2.entries.length)} directories under ${String(config.roots.length)} roots`);
   if (index2.truncated !== null) note(`        crawl stopped early (${index2.truncated})`);
   note(`openit: ${String(docs.length)} files in ${String(config.docRoots.length)} document roots`);
   note(`openit: ${String(apps.apps.length)} applications`);
+  note(`openit: ${String(links.length)} links${config.history ? " (bookmarks and history)" : " (bookmarks; history is off)"}, ${String(loadTaught().length)} taught by hand`);
   for (const root of config.roots) note(`          ${contractTilde(root.path)}`);
   return EXIT.ok;
 };
 
+// src/commands/link.ts
+var USAGE = "openit link add <name> <url> | list | forget <name>";
+var MAX_NAME = 40;
+var MAX_LINKS = 256;
+var isLinkName = (name) => /^[a-z0-9][a-z0-9.-]*$/u.test(name) && name.length <= MAX_NAME;
+var listLinks = (links) => {
+  if (links.length === 0) {
+    note("openit: no links taught yet");
+    note(`        ${USAGE}`);
+    return EXIT.ok;
+  }
+  for (const link of links) note(`  ${link.name.padEnd(16)} ${sanitizeLabel(link.url, 120)}`);
+  return EXIT.ok;
+};
+var addLink = (links, name, url) => {
+  if (!isLinkName(name)) {
+    return fail(
+      `"${sanitizeLabel(name, MAX_NAME)}" is not a usable name`,
+      "one word: letters, digits, dashes or dots"
+    ), EXIT.error;
+  }
+  const parsed = parseUrl(url);
+  if (parsed === null) return fail(`"${sanitizeLabel(url, 80)}" is not a URL`, USAGE), EXIT.error;
+  if (parsed.klass === "forbidden" || parsed.klass === "file") {
+    return fail(`openit never opens ${parsed.scheme}: links`, "nothing was saved"), EXIT.refused;
+  }
+  if (parsed.hasUserInfo) {
+    return fail("that URL carries a user name and password", "nothing was saved"), EXIT.refused;
+  }
+  const kept = links.filter((link) => link.name !== name);
+  if (kept.length >= MAX_LINKS) {
+    return fail(`that is ${String(MAX_LINKS)} links already`, "openit link forget <name>"), EXIT.error;
+  }
+  saveTaught([...kept, { name, url, addedAt: Date.now() }]);
+  note(`openit: ${name} is ${sanitizeLabel(url, 120)}`);
+  return EXIT.ok;
+};
+var forgetLink = (links, name) => {
+  const kept = links.filter((link) => link.name !== name);
+  if (kept.length === links.length) {
+    return fail(`no link named "${sanitizeLabel(name, MAX_NAME)}"`, "openit link list"), EXIT.error;
+  }
+  saveTaught(kept);
+  note(`openit: forgot ${name}`);
+  return EXIT.ok;
+};
+var runLink = (args) => {
+  const [verb, name, url] = args;
+  const links = loadTaught();
+  if (verb === void 0 || verb === "list") return listLinks(links);
+  if (verb === "add") {
+    if (name === void 0 || url === void 0) return fail("add needs a name and a URL", USAGE), EXIT.error;
+    return addLink(links, name.toLowerCase(), url);
+  }
+  if (verb === "forget") {
+    if (name === void 0) return fail("forget needs a name", USAGE), EXIT.error;
+    return forgetLink(links, name.toLowerCase());
+  }
+  return fail(`unknown link command "${sanitizeLabel(verb, MAX_NAME)}"`, USAGE), EXIT.error;
+};
+
 // src/cli.ts
 setProduct({ name: "openit", envPrefix: "OPENIT" });
-var VERSION3 = `openit ${package_default.version}`;
-var USAGE = `openit - say what to open, it works out what and with what, then opens it
+var VERSION4 = `openit ${package_default.version}`;
+var USAGE2 = `openit - say what to open, it works out what and with what, then opens it
 
 openit <words>                open the thing you mean
 openit --with <app> <words>   name the handler yourself
@@ -3394,6 +3717,8 @@ openit plan -- <words>        one JSON object on stdout
 openit which -- <words>       the resolved path or URL on stdout
 openit setup [--yes] [--root <path>] [--depth <n>] [--ai|--no-ai]
 openit index [--refresh]      show or rebuild what openit knows
+openit link add <name> <url>  teach a name for a page
+openit link list | forget <name>
 openit doctor                 show what openit sees on this machine
 openit --version
 
@@ -3405,22 +3730,23 @@ var queryArgs = (args) => {
 };
 var run = async (args, mode) => {
   const parsed = parseArgs(args);
-  if (parsed.error !== null) return fail(parsed.error, USAGE.split("\n")[2] ?? ""), EXIT.error;
+  if (parsed.error !== null) return fail(parsed.error, USAGE2.split("\n")[2] ?? ""), EXIT.error;
   return runQuery(parsed.words, { ...parsed.options, mode: mode === "run" ? parsed.options.mode : mode });
 };
 var dispatch = async (args) => {
   const command = args[0];
   if (command === void 0 || command === "--help" || command === "-h") {
-    note(USAGE);
+    note(USAGE2);
     return command === void 0 ? EXIT.error : EXIT.ok;
   }
   if (command === "--version" || command === "-v") {
-    note(VERSION3);
+    note(VERSION4);
     return EXIT.ok;
   }
   if (command === "setup") return runSetup(args.slice(1));
   if (command === "doctor") return runDoctor();
   if (command === "index") return runIndex(args.slice(1));
+  if (command === "link") return runLink(args.slice(1));
   if (command === "plan") return run(queryArgs(args), "json");
   if (command === "which") return run(queryArgs(args), "which");
   return run(args, "run");

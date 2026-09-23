@@ -3,6 +3,7 @@ import { pick, toItems } from '@franzenzenhofer/intent-core/picker';
 import type { Scored } from '@franzenzenhofer/intent-core/match/decide';
 import { loadConfig, allRoots, type Config } from '../config.js';
 import { literalTarget } from '../match/literal.js';
+import { loadTaught } from '../store/links.js';
 import { resolveHandler } from '../match/handler-match.js';
 import { resolveIn, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
 import { LIMIT, LITERAL_SCORE } from '../match/constants.js';
@@ -39,6 +40,19 @@ const buildAction = (
   reveal: query.reveal || options.reveal,
   wait: options.wait,
 });
+
+/**
+ * Tier 0.5. A name the user taught by hand is not a search term, it IS the answer - which is
+ * what makes `openit gsc` permanent. Ranking would only ever put it near the six directories
+ * that happen to start with the same three letters.
+ */
+const taughtTarget = (query: ParsedQuery): Target | null => {
+  if (query.tokens.length !== 1) return null;
+  const word = query.tokens[0];
+  const link = loadTaught().find((taught) => taught.name === word);
+  if (link === undefined) return null;
+  return { kind: 'url', ref: link.url, name: link.name, mtime: link.addedAt, source: 'link-index' };
+};
 
 const suggest = (query: ParsedQuery, guesses: readonly Scored<Target>[], config: Config): ExitCode => {
   fail(`no match for "${query.raw}"`);
@@ -123,6 +137,8 @@ export const runQuery = async (args: readonly string[], options: QueryOptions): 
     });
   const literal = literalTarget(args);
   if (literal !== null) return run(literal, LITERAL_SCORE, 'literal');
+  const taught = taughtTarget(query);
+  if (taught !== null) return run(taught, LITERAL_SCORE, 'alias');
   if (config.roots.length === 0 && config.docRoots.length === 0) {
     return fail('no roots configured', 'run `openit setup` once to pick what to learn'), EXIT.error;
   }

@@ -3,6 +3,7 @@ import type { DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { appTargets, loadAppIndex } from './store/apps.js';
 import { docTargets } from './store/docs.js';
 import { childTargets } from './store/lazy.js';
+import { linkTargets, loadLinkIndex, loadTaught } from './store/links.js';
 import type { Config } from './config.js';
 import type { Target } from './target.js';
 
@@ -32,6 +33,7 @@ export const tier1 = (config: Config, index: DirIndex): Sources => {
       ...appTargets(apps),
       ...dirTargets(index),
       ...docTargets(config.docRoots, config.ignore),
+      ...linkTargets(loadLinkIndex(config.history), loadTaught()),
     ],
   };
 };

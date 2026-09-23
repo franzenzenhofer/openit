@@ -39,9 +39,15 @@ export const FORBIDDEN_FLAGS = [
   '-f', '-h', '-s', '-e', '-t', '-i', '-o',
 ] as const;
 
-const handlerArgs = (handler: OpenHandler): string[] => {
-  if (handler.kind === 'app') return ['-a', handler.appPath];
-  if (handler.kind === 'bundleId') return ['-b', handler.bundleId];
+/**
+ * Revealing drops the handler on purpose. `open -R -a Terminal notes.txt` names both a thing
+ * to select in Finder and an application to hand it to, and openit never emits an argv whose
+ * meaning depends on which of the two open(1) decides to honour.
+ */
+const handlerArgs = (plan: OpenPlan): string[] => {
+  if (plan.reveal) return [];
+  if (plan.handler.kind === 'app') return ['-a', plan.handler.appPath];
+  if (plan.handler.kind === 'bundleId') return ['-b', plan.handler.bundleId];
   return [];
 };
 
@@ -53,7 +59,7 @@ const flags = (plan: OpenPlan): string[] => [
 ];
 
 export const buildOpenArgv = (plan: OpenPlan): string[] => {
-  const head = [...flags(plan), ...handlerArgs(plan.handler)];
+  const head = [...flags(plan), ...handlerArgs(plan)];
   // -u takes the URL as its own value, so there is no operand and no `--` to separate.
   if (plan.target.kind === 'url') return [...head, '-u', plan.target.url];
   return [...head, '--', plan.target.path];

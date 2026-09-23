@@ -11,6 +11,12 @@ export interface Target {
   readonly ref: string;
   /** What the matcher scores against: a basename, an app's display name, a bookmark title. */
   readonly name: string;
+  /**
+   * The other names this one thing answers to, scored exactly like `name`. A link is the case
+   * that needs it: a page is named by its title AND by the host that serves it, and neither one
+   * is a lesser spelling of the other.
+   */
+  readonly aka?: readonly string[];
   /** mtime in milliseconds, or a last-visit epoch for a url; 0 when unknown. */
   readonly mtime: number;
   readonly source: TargetSource;

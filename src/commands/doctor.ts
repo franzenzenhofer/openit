@@ -8,6 +8,7 @@ import { hasTty } from '@franzenzenhofer/intent-core/picker';
 import { allRoots, loadConfig } from '../config.js';
 import { loadAppIndex } from '../store/apps.js';
 import { spotlightCoverage } from '../store/spotlight.js';
+import { loadLinkIndex, loadTaught } from '../store/links.js';
 import { docTargets } from '../store/docs.js';
 import { isOverridden, resolveOpenBin, SYSTEM_OPEN } from '../act/open-bin.js';
 import { isIdentity } from '../identity.js';
@@ -38,6 +39,8 @@ export const runDoctor = (): ExitCode => {
   say('index', `${String(index.entries.length)} directories${index.truncated === null ? '' : ` (truncated: ${index.truncated})`}`);
   say('files', String(docTargets(config.docRoots, config.ignore).length));
   say('apps', String(loadAppIndex().apps.length));
+  say('links', `${String(loadLinkIndex(config.history).length)} indexed, ${String(loadTaught().length)} taught`);
+  say('browsing', config.history ? 'history read (opt in)' : 'history not read');
   for (const one of spotlightCoverage(allRoots(config))) {
     say('spotlight', `${contractTilde(one.root)} ${one.indexed ? 'indexed' : 'NOT indexed - openit cannot search it beyond its own index'}`);
   }
