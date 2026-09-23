@@ -19,8 +19,8 @@ $ openit gsc
 → https://search.google.com/search-console
 ```
 
-macOS only. `openit` is the sibling of [cdai](https://github.com/franzenzenhofer/cdai): the same
-matcher, the same frecency, the same closed-set AI tier, all shared through
+macOS only. `openit` is the sibling of [cdai](https://github.com/franzenzenhofer/cdai) v0.4.0+:
+the same matcher, the same frecency, the same closed-set AI tier, all shared through
 [intent-core](https://github.com/franzenzenhofer/intent-core). cdai takes you somewhere; openit
 opens something. That difference is the whole design, because `cd` cannot hurt you and `open` can.
 
