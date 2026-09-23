@@ -9,6 +9,7 @@ import { runSetup } from './commands/setup.js';
 import { runDoctor } from './commands/doctor.js';
 import { runIndex } from './commands/index-cmd.js';
 import { runLink } from './commands/link.js';
+import { runAlias } from './commands/alias.js';
 
 setProduct({ name: 'openit', envPrefix: 'OPENIT' });
 
@@ -27,6 +28,7 @@ openit setup [--yes] [--root <path>] [--depth <n>] [--ai|--no-ai]
 openit index [--refresh]      show or rebuild what openit knows
 openit link add <name> <url>  teach a name for a page
 openit link list | forget <name>
+openit alias list | add <thing> -- <words> | forget -- <words>
 openit doctor                 show what openit sees on this machine
 openit --version
 
@@ -58,6 +60,7 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   if (command === 'doctor') return runDoctor();
   if (command === 'index') return runIndex(args.slice(1));
   if (command === 'link') return runLink(args.slice(1));
+  if (command === 'alias') return runAlias(args.slice(1));
   if (command === 'plan') return run(queryArgs(args), 'json');
   if (command === 'which') return run(queryArgs(args), 'which');
   return run(args, 'run');

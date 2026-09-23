@@ -16,6 +16,8 @@ export interface PreviewInput {
   readonly assessed: Assessed;
   readonly origin: Origin;
   readonly score: number;
+  /** The model's own words, when a model chose this. Shown quoted and attributed. */
+  readonly reason?: string;
 }
 
 const flags = (assessed: Assessed): string[] => {
@@ -43,6 +45,7 @@ export const preview = (input: PreviewInput): void => {
   const who = handlerLabel(plan.action.handler);
   line('handler', who === '' ? 'the system default (whatever a double click would do)' : who);
   line('origin', `${input.origin} match, score ${String(Math.round(input.score))}`);
+  if (input.reason !== undefined && input.reason !== '') line('the model', `"${input.reason}"`);
   const found = flags(assessed);
   if (found.length > 0) line('flags', found.join(', '));
   line('consent', assessed.consent);
@@ -82,6 +85,7 @@ export const previewJson = (input: PreviewInput): void => {
     scheme: assessed.url?.scheme ?? null,
     handler: { kind: plan.action.handler.kind, label: handlerLabel(plan.action.handler) },
     origin: input.origin,
+    reason: input.reason ?? null,
     score: Math.round(input.score),
     flags: flags(assessed),
     consent: assessed.consent,

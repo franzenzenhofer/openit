@@ -3,7 +3,8 @@ import { frecencyByKey, loadVisits } from '@franzenzenhofer/intent-core/store/vi
 import { stateFile } from '@franzenzenhofer/intent-core/paths';
 import type { Scored } from '@franzenzenhofer/intent-core/match/decide';
 import { decideTargets, rankTargets, type TargetDecision } from './match/resolve.js';
-import { dirCandidates } from './match/score-target.js';
+import { dirCandidates, looseTargets } from './match/score-target.js';
+import { LIMIT } from './match/constants.js';
 import { readings, type ParsedQuery } from './match/tokenize.js';
 import { tier1, tier1b } from './sources.js';
 import { spotlightTargets } from './store/spotlight.js';
@@ -20,6 +21,8 @@ export interface Resolved {
   readonly target: Target;
   readonly score: number;
   readonly origin: Origin;
+  /** The model's own words, when a model is what answered. Printed quoted and attributed. */
+  readonly reason?: string;
 }
 
 export type Resolution =
@@ -112,6 +115,28 @@ export const spotlightPool = (
   if (found.length === 0) return pool;
   const targets = [...pool.targets, ...found];
   return { targets, attempt: bestReading(query, targets, context) };
+};
+
+/**
+ * What the model is allowed to look at: the things this query loosely resembles, plus the
+ * things this person actually opens. Both are already in the pool - the model is never given
+ * a reason to widen the search, only to read the same shortlist differently.
+ */
+export const aiCandidates = (
+  query: ParsedQuery,
+  pool: Pool,
+  context: QueryContext,
+): Target[] => {
+  const frecent = pool.targets
+    .filter((target) => (context.frecency.get(target.ref) ?? 0) > 0)
+    .sort((a, b) => (context.frecency.get(b.ref) ?? 0) - (context.frecency.get(a.ref) ?? 0))
+    .slice(0, LIMIT.aiFrecent);
+  const seen = new Set<string>();
+  return [...looseTargets(query, pool.targets), ...frecent].filter((target) => {
+    if (seen.has(target.ref)) return false;
+    seen.add(target.ref);
+    return true;
+  });
 };
 
 export const decideFrom = (attempt: Attempt): TargetDecision =>
