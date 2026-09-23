@@ -49,7 +49,7 @@ const BY_WORD = new Map<string, FileKind>(
 
 const BY_KIND = new Map<FileKind, KindRule>(RULES.map((rule) => [rule.kind, rule]));
 
-export const kindWord = (word: string): FileKind | undefined => BY_WORD.get(word);
+export const kindOfWord = (word: string): FileKind | undefined => BY_WORD.get(word);
 
 const TARGET_KIND_WORDS = new Map<string, TargetKind>([
   ['app', 'app'], ['application', 'app'], ['apps', 'app'],

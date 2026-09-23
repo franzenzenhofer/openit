@@ -5,7 +5,9 @@ import type { TargetClass } from './classes.js';
  * a filename can carry a right-to-left override and render as something else entirely, so
  * asking someone to retype what they see would be asking them to confirm the lie.
  */
-export const verifyWord = (klass: TargetClass, scheme: string): string => {
+export const verifyWord = (klass: TargetClass, scheme: string, runsIt = false): string => {
+  // A taught command or a terminal runs the thing whatever the thing is, so that is the word.
+  if (runsIt) return 'run';
   if (klass === 'application') return 'application';
   if (klass === 'installer') return 'installer';
   if (klass === 'script') return 'script';

@@ -1,10 +1,12 @@
 import { matchName } from '@franzenzenhofer/intent-core/match/score';
-import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
-import { HANDLER_THRESHOLD, MATCH } from './constants.js';
-import { LIMIT } from './constants.js';
+import { HANDLER_THRESHOLD, LIMIT, MATCH } from './constants.js';
+import { extensionOf } from '../risk/classify.js';
+import { commandHandler, ruleNames } from '../act/command.js';
+import { matchesKind, type FileKind } from './kinds.js';
 import type { ParsedQuery } from './tokenize.js';
 import type { AppRef, Handler } from '../handler.js';
 import type { HandlerRule } from '../config.js';
+import type { Target } from '../target.js';
 
 export interface HandlerChoice {
   readonly handler: Handler;
@@ -21,29 +23,57 @@ const scoreApps = (word: string, apps: readonly AppRef[]): HandlerChoice[] =>
     .filter((choice) => choice.score > 0)
     .sort((a, b) => b.score - a.score);
 
-const templateFor = (rule: HandlerRule): Handler | null => {
-  const command = resolveExecutable(rule.command);
-  if (command === null) return null;
-  return {
-    kind: 'command',
-    template: { label: rule.ext === '*' ? rule.command : `${rule.command} (${rule.ext})`, command, args: rule.args },
-  };
+const appNamed = (name: string, apps: readonly AppRef[]): AppRef | undefined =>
+  apps.find((app) => app.name.toLowerCase() === name.toLowerCase());
+
+const handlerOf = (rule: HandlerRule, apps: readonly AppRef[]): Handler | null => {
+  if (rule.command !== '') return commandHandler(rule);
+  const app = appNamed(rule.app, apps);
+  return app === undefined ? null : { kind: 'app', app };
 };
 
 /**
- * A taught command handler, matched by its own name. These are user-authored only and a model
- * can never reach them - running a command is execution, not opening.
+ * A taught rule, matched by its own names: what it runs, what app it names, and the extension
+ * or kind it was taught for. `openit cdai in claude` finds it by the first of those.
  */
-const scoreCommands = (word: string, rules: readonly HandlerRule[]): HandlerChoice[] =>
+const scoreRules = (word: string, rules: readonly HandlerRule[], apps: readonly AppRef[]): HandlerChoice[] =>
   rules
-    .filter((rule) => rule.command !== '')
-    .flatMap((rule) => {
-      const handler = templateFor(rule);
+    .flatMap((rule): HandlerChoice[] => {
+      const handler = handlerOf(rule, apps);
       if (handler === null) return [];
-      const score = matchName(word, rule.ext === '*' ? rule.command : rule.ext, MATCH);
+      const score = Math.max(...ruleNames(rule).map((name) => matchName(word, name, MATCH)));
       return score > 0 ? [{ handler, score }] : [];
     })
     .sort((a, b) => b.score - a.score);
+
+const appliesTo = (rule: HandlerRule, target: Target): boolean => {
+  if (target.kind !== 'file') return false;
+  if (rule.ext === '*') return true;
+  if (rule.ext !== '') return extensionOf(target.ref) === rule.ext;
+  return matchesKind(target.ref, rule.kind as FileKind);
+};
+
+/**
+ * The handler a taught rule gives this one thing when nobody named one. An extension is more
+ * specific than a kind, and a kind is more specific than "everything", so they are tried in
+ * that order - and a rule whose app or command is no longer installed is simply not a rule.
+ */
+export const handlerForTarget = (
+  target: Target,
+  rules: readonly HandlerRule[],
+  apps: readonly AppRef[],
+): Handler | null => {
+  const matching = rules.filter((rule) => appliesTo(rule, target));
+  const byExtension = matching.find((rule) => rule.ext !== '' && rule.ext !== '*');
+  const byKind = matching.find((rule) => rule.kind !== '');
+  const catchAll = matching.find((rule) => rule.ext === '*');
+  for (const rule of [byExtension, byKind, catchAll]) {
+    if (rule === undefined) continue;
+    const handler = handlerOf(rule, apps);
+    if (handler !== null) return handler;
+  }
+  return null;
+};
 
 export const handlerLabelOf = (choice: HandlerChoice): string =>
   choice.handler.kind === 'app' ? choice.handler.app.name
@@ -68,7 +98,7 @@ export const resolveHandler = (input: HandlerInput): HandlerOutcome => {
   if (query.reveal) return { kind: 'handler', handler: { kind: 'reveal' } };
   const word = query.handlerWord;
   if (word === null) return { kind: 'handler', handler: { kind: 'default' } };
-  const scored = [...scoreCommands(word, input.rules), ...scoreApps(word, input.apps)]
+  const scored = [...scoreRules(word, input.rules, input.apps), ...scoreApps(word, input.apps)]
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
   if (best !== undefined && best.score >= HANDLER_THRESHOLD.hit) {

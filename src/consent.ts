@@ -34,10 +34,12 @@ export const granted = (assessed: Assessed, plan: Plan): boolean => {
   if (assessed.consent === 'allow') return true;
   describe(assessed, plan);
   if (assessed.consent === 'confirm') return confirm('openit: open it?');
+  const runsIt = assessed.assessment.handler === 'terminal';
   const word = verifyWord(
     assessed.facts?.klass ?? 'unknown',
     assessed.url?.scheme ?? assessed.redirect?.scheme ?? '',
+    runsIt,
   );
-  line('opening it runs code as you');
+  line(runsIt ? 'that handler RUNS what you give it' : 'opening it runs code as you');
   return confirmTyped(`openit: type  ${word}  to open it, anything else aborts:`, word);
 };

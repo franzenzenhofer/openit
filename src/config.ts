@@ -20,8 +20,10 @@ export interface DocRoot {
 
 /** A taught way to open a kind of thing. Extensions win over kinds, kinds over nothing. */
 export interface HandlerRule {
-  /** A file extension without the dot, or '*' for everything. */
+  /** A file extension without the dot, '*' for everything, or '' when this rule names a kind. */
   readonly ext: string;
+  /** A FileKind name - pdf, screenshot, deck - or '' when this rule names an extension. */
+  readonly kind: string;
   /** An app display name, or the empty string when `command` is set. */
   readonly app: string;
   readonly command: string;
@@ -55,11 +57,14 @@ const readStrings = (value: unknown, fallback: readonly string[]): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [...fallback];
 
 const readHandler = (value: unknown): HandlerRule | undefined => {
-  if (!isRecord(value) || typeof value['ext'] !== 'string' || value['ext'] === '') return undefined;
+  if (!isRecord(value)) return undefined;
+  const ext = typeof value['ext'] === 'string' ? value['ext'].toLowerCase() : '';
+  const kind = typeof value['kind'] === 'string' ? value['kind'].toLowerCase() : '';
+  if (ext === '' && kind === '') return undefined;
   const app = typeof value['app'] === 'string' ? value['app'] : '';
   const command = typeof value['command'] === 'string' ? value['command'] : '';
   if (app === '' && command === '') return undefined;
-  return { ext: value['ext'].toLowerCase(), app, command, args: readStrings(value['args'], []) };
+  return { ext, kind, app, command, args: readStrings(value['args'], []) };
 };
 
 export const DEFAULT_AI: AiConfig = {

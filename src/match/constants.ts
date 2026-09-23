@@ -89,6 +89,11 @@ export const STOPWORDS = new Set([
 export const LATEST_WORDS = new Set(['latest', 'newest', 'last', 'recent']);
 export const OLDEST_WORDS = new Set(['oldest', 'first']);
 export const REVEAL_WORDS = new Set(['reveal', 'finder']);
+/**
+ * Dropped, never acted on. "show me the invoice" means open it; only "show it in FINDER" means
+ * reveal it, so the word that decides is the app's name and `show` is filler around it.
+ */
+export const SHOW_WORDS = new Set(['show']);
 export const NEW_WORDS = new Set(['new']);
 export const BACKGROUND_WORDS = new Set(['background', 'bg']);
 export const WITH_OPERATOR = 'with';

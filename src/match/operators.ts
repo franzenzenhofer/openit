@@ -1,8 +1,8 @@
 import {
   BACKGROUND_WORDS, HERE_WORD, IN_OPERATOR, LATEST_WORDS, NEW_WORDS, OLDEST_WORDS,
-  REVEAL_WORDS, WITH_OPERATOR,
+  REVEAL_WORDS, SHOW_WORDS, WITH_OPERATOR,
 } from './constants.js';
-import { kindWord, targetKindWord, type FileKind } from './kinds.js';
+import { kindOfWord, targetKindWord, type FileKind } from './kinds.js';
 import type { TargetKind } from '../target.js';
 
 export type Order = 'latest' | 'oldest' | 'none';
@@ -23,14 +23,41 @@ export interface Scan<T> {
  * captured here; whether it means a place or an app is decided later, against the real roots
  * and the real app index.
  */
-export const takeOperands = (words: readonly string[]): Scan<{ withWord: string | null; inWord: string | null }> => {
+export interface Operands {
+  readonly withWord: string | null;
+  readonly inWord: string | null;
+  /**
+   * `in finder` and `in the background` name no place and no app. They are read here rather
+   * than by the flag scan because `in` would otherwise swallow the word that carries the
+   * meaning, and the query would go looking for a folder called "finder".
+   */
+  readonly reveal: boolean;
+  readonly background: boolean;
+}
+
+export const takeOperands = (words: readonly string[]): Scan<Operands> => {
   const rest: string[] = [];
   let withWord: string | null = null;
   let inWord: string | null = null;
+  let reveal = false;
+  let background = false;
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];
     if (word === undefined) continue;
-    const next = words[i + 1];
+    // "in the background" is the same phrase as "in background" with a stopword in it.
+    const next = words[i + 1] === 'the' ? words[i + 2] : words[i + 1];
+    const skip = words[i + 1] === 'the' ? 2 : 1;
+    const operand = word === WITH_OPERATOR || word === IN_OPERATOR;
+    if (operand && next !== undefined && REVEAL_WORDS.has(next)) {
+      reveal = true;
+      i += skip;
+      continue;
+    }
+    if (operand && next !== undefined && BACKGROUND_WORDS.has(next)) {
+      background = true;
+      i += skip;
+      continue;
+    }
     if (word === WITH_OPERATOR && next !== undefined && withWord === null) {
       withWord = next;
       i += 1;
@@ -43,7 +70,7 @@ export const takeOperands = (words: readonly string[]): Scan<{ withWord: string 
     }
     rest.push(word);
   }
-  return { rest, taken: { withWord, inWord } };
+  return { rest, taken: { withWord, inWord, reveal, background } };
 };
 
 /** Scanned before stopword removal, because "show" and "in" would otherwise vanish first. */
@@ -53,6 +80,7 @@ export const takeFlags = (words: readonly string[]): Scan<Flags> => {
   let newInstance = false;
   let background = false;
   for (const word of words) {
+    if (SHOW_WORDS.has(word)) continue;
     if (REVEAL_WORDS.has(word)) {
       reveal = true;
       continue;
@@ -100,7 +128,7 @@ export const takeKinds = (words: readonly string[]): Kinds => {
   const kinds: FileKind[] = [];
   const targetKinds: TargetKind[] = [];
   for (const word of words) {
-    const kind = kindWord(word);
+    const kind = kindOfWord(word);
     if (kind !== undefined && !kinds.includes(kind)) kinds.push(kind);
     const targetKind = targetKindWord(word);
     if (targetKind !== undefined && !targetKinds.includes(targetKind)) targetKinds.push(targetKind);

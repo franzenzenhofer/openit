@@ -97,9 +97,14 @@ describe('named rules a human can read', () => {
     expect(requiredConsent(at({ subject: path('document'), quarantined: true }))).toBe('confirm');
   });
 
-  it('treats a terminal handler as execution', () => {
+  it('treats a terminal handler as execution, and asks for a typed word every time', () => {
     expect(requiredConsent(at({ handler: 'terminal' }))).toBe('verify');
-    expect(requiredConsent(at({ handler: 'terminal', origin: 'deterministic' }))).toBe('refuse');
+    expect(requiredConsent(at({ handler: 'terminal', origin: 'deterministic' }))).toBe('verify');
+  });
+
+  it('refuses a terminal handler over anything a model picked', () => {
+    expect(requiredConsent(at({ handler: 'terminal', origin: 'ai' }))).toBe('refuse');
+    expect(requiredConsent(at({ handler: 'terminal', handlerFromAi: true }))).toBe('refuse');
   });
 
   it('refuses a handler the model chose that is not a viewer, editor or browser', () => {

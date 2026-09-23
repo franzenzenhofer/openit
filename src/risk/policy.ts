@@ -94,7 +94,11 @@ const byHandler = (assessment: Assessment, from: Consent): Consent => {
   if (assessment.handlerFromAi
     && !['viewer', 'editor', 'browser', 'default'].includes(assessment.handler)) return 'refuse';
   if (assessment.handler === 'terminal') {
-    return assessment.origin === 'literal' ? atLeast(from, 'verify') : 'refuse';
+    // A terminal, or a taught command handler, turns the target into something to execute. The
+    // person may ask for that - by naming it - and is then asked to type a word back. What is
+    // refused outright is a model having picked either half of it: the thing that gets run, or
+    // the thing that runs it.
+    return assessment.origin === 'ai' ? 'refuse' : atLeast(from, 'verify');
   }
   return assessment.handler === 'installer' ? atLeast(from, 'verify') : from;
 };

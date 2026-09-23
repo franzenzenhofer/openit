@@ -53,6 +53,8 @@ export const tokenize = (input: string): ParsedQuery => {
     kinds,
     targetKinds,
     ...flags.taken,
+    reveal: flags.taken.reveal || operands.taken.reveal,
+    background: flags.taken.background || operands.taken.background,
     within: [],
   };
 };
