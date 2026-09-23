@@ -3,10 +3,20 @@
   "version": "0.1.0",
   "description": "Say what to open. It works out what you meant and which app should open it, then opens it.",
   "type": "module",
-  "bin": { "openit": "dist/openit.js" },
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
-  "os": ["darwin"],
+  "bin": {
+    "openit": "dist/openit.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test scripts",
@@ -15,11 +25,14 @@
   },
   "license": "MIT",
   "author": "Franz Enzenhofer",
-  "repository": { "type": "git", "url": "git+https://github.com/franzenzenhofer/openit.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franzenzenhofer/openit.git"
+  },
   "private": true,
   "devDependencies": {
     "@eslint/js": "^9.39.0",
-    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#0e9e9dd34b344a089764086991e23b3b6a30cfde",
+    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#d0669c2ba0d63e521a22c44d9cf52b016a625914",
     "@types/node": "^22.18.0",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",

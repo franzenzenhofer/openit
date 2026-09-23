@@ -1,7 +1,7 @@
 import { contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { buildOpenArgv, type OpenHandler, type OpenPlan } from './act/argv.js';
 import { TARGET_PLACEHOLDER, handlerLabel, validTemplate, type Handler } from './handler.js';
-import { quoteArgv } from './quote.js';
+import { quoteArgv } from '@franzenzenhofer/intent-core/shell/quote';
 import type { Target } from './target.js';
 
 export interface Action {
