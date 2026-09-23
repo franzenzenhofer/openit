@@ -47,21 +47,6 @@ export const readMagic = (path: string): Magic => {
   }
 };
 
-/**
- * A .app is a directory, and ANY directory holding Contents/MacOS/ launches code whatever it is
- * called. "Directories are safe" has a hole in it on day one without this.
- */
-const directoryClass = (path: string): TargetClass => {
-  const extension = extensionOf(path);
-  try {
-    if (statSync(join(path, 'Contents', 'MacOS')).isDirectory()) return 'application';
-  } catch {
-    // Not an application bundle; fall through to what its extension claims.
-  }
-  if (extension === 'app') return 'application';
-  return BUNDLE_EXTENSIONS.has(extension) ? 'bundle' : 'directory';
-};
-
 const byExtension = (extension: string): TargetClass | null => {
   if (INSTALLER_EXTENSIONS.has(extension)) return 'installer';
   if (LOCATOR_EXTENSIONS.has(extension)) return 'locator';
@@ -70,6 +55,28 @@ const byExtension = (extension: string): TargetClass | null => {
   if (CODE_EXTENSIONS.has(extension)) return 'code';
   return DOCUMENT_EXTENSIONS.has(extension) ? 'document' : null;
 };
+
+/**
+ * A .app is a directory, and ANY directory holding Contents/MacOS/ launches code whatever it is
+ * called. "Directories are safe" has a hole in it on day one without this.
+ */
+const DIRECTORY_CLAIMS: readonly TargetClass[] = ['installer', 'script', 'locator', 'executable'];
+
+const directoryClass = (path: string): TargetClass => {
+  const extension = extensionOf(path);
+  try {
+    if (statSync(join(path, 'Contents', 'MacOS')).isDirectory()) return 'application';
+  } catch {
+    // Not an application bundle; fall through to what its extension claims.
+  }
+  if (extension === 'app') return 'application';
+  // .mpkg, .sparsebundle and .scptd are directories on disk and installers or scripts in every
+  // way that matters. Reading the extension only for files let all three through as folders.
+  const claimed = byExtension(extension);
+  if (claimed !== null && DIRECTORY_CLAIMS.includes(claimed)) return claimed;
+  return BUNDLE_EXTENSIONS.has(extension) ? 'bundle' : 'directory';
+};
+
 
 const fileClass = (path: string, magic: Magic, executableBit: boolean): TargetClass => {
   // Bytes outrank the name: a Mach-O called "invoice.pdf" is still a Mach-O.

@@ -90,7 +90,7 @@ const prepare = (input: ActInput): PreviewInput | { readonly code: ExitCode } =>
 
 /** The three modes that decide and print but never ask and never launch. */
 const show = (mode: Exclude<ActMode, 'run'>, shown: PreviewInput): ExitCode => {
-  if (mode === 'json') return previewJson(shown), EXIT.ok;
+  if (mode === 'json') return previewJson(shown);
   if (mode === 'which') return previewWhich(shown);
   preview(shown);
   return shown.assessed.consent === 'refuse' ? EXIT.refused : EXIT.ok;

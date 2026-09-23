@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,30 @@ describe('what a shell is told to evaluate', () => {
     // A wrapper would have to be named `openit` exactly; the completion widget is `_openit`.
     expect(init('zsh').split('\n').some((line) => line.startsWith('openit('))).toBe(false);
     expect(init('bash')).toContain('complete -o default -F');
+  });
+
+  it('hands zsh the words separately, not the whole line as one', () => {
+    // A quoted zsh slice without (@) joins on IFS, so completion worked on the first word and
+    // returned nothing after it. Run the real widget against a stub `openit` and count what it
+    // was handed - to a file, because the widget reads its stdout.
+    const dir = mkdtempSync(join(tmpdir(), 'openit-slice-'));
+    const seen = join(dir, 'argc');
+    const script = join(dir, 'slice.zsh');
+    writeFileSync(script, [
+      `openit() { print -r -- "argc=$#" > ${seen}; return 0 }`,
+      'compdef() { : }',
+      'compadd() { : }',
+      `eval "$(node ${CLI} init zsh)"`,
+      'words=(openit notes in docs); CURRENT=4',
+      '_openit',
+    ].join('\n'));
+    expect(spawnSync('/bin/zsh', ['-f', script], { encoding: 'utf8', env }).status).toBe(0);
+    // `complete`, `--`, and the three words of the command line.
+    expect(readFileSync(seen, 'utf8').trim()).toBe('argc=5');
+  });
+
+  it('keeps bash from expanding a candidate name against the current directory', () => {
+    expect(init('bash')).toContain('set -f');
   });
 
   it('says which shells it knows when asked for one it does not', () => {

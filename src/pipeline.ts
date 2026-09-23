@@ -4,7 +4,7 @@ import { stateFile } from '@franzenzenhofer/intent-core/paths';
 import type { Scored } from '@franzenzenhofer/intent-core/match/decide';
 import { decideTargets, rankTargets, type TargetDecision } from './match/resolve.js';
 import { dirCandidates, looseTargets } from './match/score-target.js';
-import { LIMIT } from './match/constants.js';
+import { LIMIT, THRESHOLD } from './match/constants.js';
 import { readings, type ParsedQuery } from './match/tokenize.js';
 import { tier1, tier1b } from './sources.js';
 import { spotlightTargets } from './store/spotlight.js';
@@ -55,19 +55,27 @@ export interface Attempt {
   readonly query: ParsedQuery;
 }
 
-/** Every reading of the query, best understood first, over one pool of candidates. */
+/**
+ * Every reading of the query, best understood first, over one pool of candidates.
+ *
+ * A reading is taken when it produces a candidate worth showing, not merely a candidate.
+ * "veganblatt.at" appears inside one bookmarked URL, which scored 200 as a path substring and
+ * stopped the search there - so the reading that actually names three folders, "veganblatt",
+ * was never tried and the question went to a model instead.
+ */
 export const bestReading = (
   query: ParsedQuery,
   targets: readonly Target[],
   context: ScoreContext,
 ): Attempt => {
-  let fallback: Attempt = { ranked: [], query };
+  let fallback: Attempt | null = null;
   for (const reading of readings(query)) {
     const ranked = rankTargets(reading, targets, context);
-    if (ranked.length > 0) return { ranked, query: reading };
-    if (fallback.ranked.length === 0) fallback = { ranked, query: reading };
+    const best = ranked[0];
+    if (best !== undefined && best.quality >= THRESHOLD.candidate) return { ranked, query: reading };
+    if (fallback === null && ranked.length > 0) fallback = { ranked, query: reading };
   }
-  return fallback;
+  return fallback ?? { ranked: [], query };
 };
 
 export interface Pool {

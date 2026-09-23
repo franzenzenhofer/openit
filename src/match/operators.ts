@@ -49,7 +49,10 @@ const after = (words: readonly string[], i: number): Phrase => {
   if (next === undefined) return { taken: 0, operand: null, flag: null };
   if (REVEAL_WORDS.has(next)) return { taken: skip, operand: null, flag: 'reveal' };
   if (BACKGROUND_WORDS.has(next)) return { taken: skip, operand: null, flag: 'background' };
-  return { taken: 1, operand: words[i + 1] ?? null, flag: null };
+  // The operand is the word the phrase was about, not the filler in front of it: "in the docs"
+  // means docs. Taking `the` made openit search for candidates containing "the", and
+  // "with the sublime" refused outright because no application is called "the".
+  return { taken: skip, operand: next, flag: null };
 };
 
 export const takeOperands = (words: readonly string[]): Scan<Operands> => {
@@ -64,10 +67,18 @@ export const takeOperands = (words: readonly string[]): Scan<Operands> => {
       continue;
     }
     const phrase = after(words, i);
-    if (phrase.flag !== null) taken[phrase.flag] = true;
-    else if (word === WITH_OPERATOR && taken.withWord === null) taken.withWord = phrase.operand;
-    else if (word === IN_OPERATOR && taken.inWord === null) taken.inWord = phrase.operand;
-    else if (phrase.operand === null) rest.push(word);
+    if (phrase.flag !== null) {
+      taken[phrase.flag] = true;
+    } else if (word === WITH_OPERATOR && taken.withWord === null) {
+      taken.withWord = phrase.operand;
+    } else if (word === IN_OPERATOR && taken.inWord === null) {
+      taken.inWord = phrase.operand;
+    } else {
+      // A second `with` or `in` is a word, not an operator - and it may not take the word after
+      // it with it. "a with b with c" used to search for "a" and lose "c" entirely.
+      rest.push(word);
+      continue;
+    }
     i += phrase.taken;
   }
   return { rest, taken };

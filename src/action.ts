@@ -68,7 +68,9 @@ const plannedCommand = (action: Action, command: string, argv: readonly string[]
 
 /** Pure: an Action in, the exact process invocation out. Nothing here touches the disk. */
 export const planAction = (action: Action, openBin: string): Planned => {
-  if (action.handler.kind === 'command') {
+  // Revealing is the one action that launches nothing, so it cannot be the thing that runs a
+  // taught command. Belt and braces: the handler should already be `reveal` by now.
+  if (action.handler.kind === 'command' && !action.reveal) {
     const { template } = action.handler;
     if (!validTemplate(template)) {
       return { error: `handler "${template.label}" does not say where the target goes` };

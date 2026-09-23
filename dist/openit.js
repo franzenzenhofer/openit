@@ -161,7 +161,7 @@ var hasPrivateMode = (path, directory) => {
 // package.json
 var package_default = {
   name: "openit",
-  version: "0.1.3",
+  version: "0.1.4",
   description: "Say what to open. It works out what you meant and which app should open it, then opens it.",
   type: "module",
   bin: {
@@ -390,7 +390,6 @@ var confirmTyped = (question, word) => {
   }
   return answer.trim().toLowerCase() === word.toLowerCase();
 };
-var toItems = (values) => values.map((value) => ({ value, label: contractTilde(value) }));
 var pick = (items) => {
   if (items.length === 0)
     return null;
@@ -775,7 +774,10 @@ var BONUS = {
   kindMatch: 60,
   /** openit's targets are documents, not projects, so recent beats old. */
   recency: 45,
-  /** The whole query is one word and it exactly names an installed app. */
+  /**
+   * How far above an exact name an installed application ranks when the whole query is one
+   * word. A launcher's whole job is that "chrome" means the browser.
+   */
   appExact: 80
 };
 var THRESHOLD = {
@@ -823,8 +825,7 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "please",
   "it",
   "up",
-  "open",
-  "openit"
+  "open"
 ]);
 var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
 var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
@@ -1662,15 +1663,6 @@ var readMagic = (path) => {
     if (fd !== void 0) closeSync2(fd);
   }
 };
-var directoryClass = (path) => {
-  const extension = extensionOf(path);
-  try {
-    if (statSync6(join5(path, "Contents", "MacOS")).isDirectory()) return "application";
-  } catch {
-  }
-  if (extension === "app") return "application";
-  return BUNDLE_EXTENSIONS.has(extension) ? "bundle" : "directory";
-};
 var byExtension = (extension) => {
   if (INSTALLER_EXTENSIONS.has(extension)) return "installer";
   if (LOCATOR_EXTENSIONS.has(extension)) return "locator";
@@ -1678,6 +1670,18 @@ var byExtension = (extension) => {
   if (EXECUTABLE_EXTENSIONS.has(extension)) return "executable";
   if (CODE_EXTENSIONS.has(extension)) return "code";
   return DOCUMENT_EXTENSIONS.has(extension) ? "document" : null;
+};
+var DIRECTORY_CLAIMS = ["installer", "script", "locator", "executable"];
+var directoryClass = (path) => {
+  const extension = extensionOf(path);
+  try {
+    if (statSync6(join5(path, "Contents", "MacOS")).isDirectory()) return "application";
+  } catch {
+  }
+  if (extension === "app") return "application";
+  const claimed = byExtension(extension);
+  if (claimed !== null && DIRECTORY_CLAIMS.includes(claimed)) return claimed;
+  return BUNDLE_EXTENSIONS.has(extension) ? "bundle" : "directory";
 };
 var fileClass = (path, magic, executableBit) => {
   if (magic === "macho") return "executable";
@@ -1876,7 +1880,7 @@ var after = (words2, i) => {
   if (next === void 0) return { taken: 0, operand: null, flag: null };
   if (REVEAL_WORDS.has(next)) return { taken: skip, operand: null, flag: "reveal" };
   if (BACKGROUND_WORDS.has(next)) return { taken: skip, operand: null, flag: "background" };
-  return { taken: 1, operand: words2[i + 1] ?? null, flag: null };
+  return { taken: skip, operand: next, flag: null };
 };
 var takeOperands = (words2) => {
   const rest = [];
@@ -1889,10 +1893,16 @@ var takeOperands = (words2) => {
       continue;
     }
     const phrase = after(words2, i);
-    if (phrase.flag !== null) taken[phrase.flag] = true;
-    else if (word === WITH_OPERATOR && taken.withWord === null) taken.withWord = phrase.operand;
-    else if (word === IN_OPERATOR && taken.inWord === null) taken.inWord = phrase.operand;
-    else if (phrase.operand === null) rest.push(word);
+    if (phrase.flag !== null) {
+      taken[phrase.flag] = true;
+    } else if (word === WITH_OPERATOR && taken.withWord === null) {
+      taken.withWord = phrase.operand;
+    } else if (word === IN_OPERATOR && taken.inWord === null) {
+      taken.inWord = phrase.operand;
+    } else {
+      rest.push(word);
+      continue;
+    }
     i += phrase.taken;
   }
   return { rest, taken };
@@ -2611,6 +2621,10 @@ var passesFilters = (query2, target) => {
   if (target.kind !== "file") return true;
   return query2.kinds.some((kind) => matchesKind(target.ref, kind));
 };
+var asNamedApp = (query2, target, quality) => {
+  if (target.kind !== "app" || query2.tokens.length !== 1) return quality;
+  return quality >= SCORE.wordBoundary ? SCORE.exact + BONUS.appExact : quality;
+};
 var matchQuality = (query2, target) => {
   if (!passesFilters(query2, target) || query2.tokens.length === 0) return SCORE.none;
   let sum = 0;
@@ -2619,7 +2633,7 @@ var matchQuality = (query2, target) => {
     if (single === SCORE.none) return SCORE.none;
     sum += single;
   }
-  return sum / query2.tokens.length;
+  return asNamedApp(query2, target, sum / query2.tokens.length);
 };
 var brevityBonus = (query2, target) => {
   const queried = query2.tokens.reduce((sum, token) => sum + token.length, 0);
@@ -2635,13 +2649,9 @@ var kindBonus = (query2, target) => {
   if (query2.kinds.length === 0 || target.kind !== "file") return 0;
   return query2.kinds.some((kind) => matchesKind(target.ref, kind)) ? BONUS.kindMatch : 0;
 };
-var appBonus = (query2, target) => {
-  if (target.kind !== "app" || query2.tokens.length !== 1) return 0;
-  return target.name.toLowerCase() === query2.tokens[0] ? BONUS.appExact : 0;
-};
 var contextualScore = (query2, target, context, quality) => {
   const under = target.kind !== "url" && target.ref !== context.cwd && target.ref.startsWith(`${context.cwd}/`) ? BONUS.underCwd : 0;
-  return quality + frecencyBonus(context.frecency.get(target.ref) ?? 0, BONUS.frecency) + under + brevityBonus(query2, target) + recencyBonus(target, context.nowMs) + kindBonus(query2, target) + appBonus(query2, target);
+  return quality + frecencyBonus(context.frecency.get(target.ref) ?? 0, BONUS.frecency) + under + brevityBonus(query2, target) + recencyBonus(target, context.nowMs) + kindBonus(query2, target);
 };
 var looseTargets = (query2, targets) => targets.map((target) => ({ target, score: looseScore(query2.tokens, target.name, MATCH) })).filter((scored) => scored.score > SCORE.none).sort((a, b) => b.score - a.score).slice(0, LIMIT.aiTargets).map((scored) => scored.target);
 
@@ -2823,13 +2833,14 @@ var freshIndex = (config) => {
   return matchesConfig(index2, config) ? index2 : refreshIndex(config);
 };
 var bestReading = (query2, targets, context) => {
-  let fallback = { ranked: [], query: query2 };
+  let fallback = null;
   for (const reading of readings(query2)) {
     const ranked2 = rankTargets(reading, targets, context);
-    if (ranked2.length > 0) return { ranked: ranked2, query: reading };
-    if (fallback.ranked.length === 0) fallback = { ranked: ranked2, query: reading };
+    const best = ranked2[0];
+    if (best !== void 0 && best.quality >= THRESHOLD.candidate) return { ranked: ranked2, query: reading };
+    if (fallback === null && ranked2.length > 0) fallback = { ranked: ranked2, query: reading };
   }
-  return fallback;
+  return fallback ?? { ranked: [], query: query2 };
 };
 var deterministicPool = (query2, config, context) => {
   const targets = [...tier1(config, freshIndex(config)).targets];
@@ -3365,7 +3376,7 @@ var plannedCommand = (action, command, argv) => ({
   printed: quoteArgv(command, argv)
 });
 var planAction = (action, openBin) => {
-  if (action.handler.kind === "command") {
+  if (action.handler.kind === "command" && !action.reveal) {
     const { template } = action.handler;
     if (!validTemplate(template)) {
       return { error: `handler "${template.label}" does not say where the target goes` };
@@ -3600,7 +3611,8 @@ var requiredConsent = (assessment) => {
   if (assessment.subject.kind === "url" && assessment.subject.hasUserInfo) return "refuse";
   const base = isCuratedApp(assessment) ? "allow" : baseConsent(assessment);
   if (base === "refuse") return "refuse";
-  if (assessment.reveal && assessment.subject.kind === "path") return "allow";
+  const executes = assessment.handler === "terminal" || assessment.handlerFromAi;
+  if (assessment.reveal && assessment.subject.kind === "path" && !executes) return "allow";
   const level = byHandler(assessment, contextual(assessment, base));
   if (assessment.origin !== "ai") return level;
   return index(level) >= index("verify") ? "refuse" : atLeast(level, "confirm");
@@ -3861,6 +3873,7 @@ var previewWhich = (input) => {
 };
 var previewJson = (input) => {
   const { plan, assessed } = input;
+  const refused = assessed.consent === "refuse";
   emit(JSON.stringify({
     v: 1,
     target: {
@@ -3877,9 +3890,10 @@ var previewJson = (input) => {
     score: Math.round(input.score),
     flags: flags2(assessed),
     consent: assessed.consent,
-    command: plan.command,
-    argv: plan.argv
+    command: refused ? null : plan.command,
+    argv: refused ? [] : plan.argv
   }));
+  return refused ? EXIT.refused : EXIT.ok;
 };
 
 // src/commands/act.ts
@@ -3929,7 +3943,7 @@ var prepare = (input) => {
   };
 };
 var show = (mode, shown) => {
-  if (mode === "json") return previewJson(shown), EXIT.ok;
+  if (mode === "json") return previewJson(shown);
   if (mode === "which") return previewWhich(shown);
   preview(shown);
   return shown.assessed.consent === "refuse" ? EXIT.refused : EXIT.ok;
@@ -3981,7 +3995,10 @@ var suggest = (query2, guesses, config) => {
 var chooseTarget = (decision) => {
   if (decision.kind === "hit") return decision.item;
   if (decision.kind !== "choose") return null;
-  const chosen = pick(toItems(decision.candidates.map((c) => c.item.ref)));
+  const chosen = pick(decision.candidates.map((scored) => ({
+    value: scored.item.ref,
+    label: displayTarget(scored.item)
+  })));
   if (chosen === null) return null;
   return decision.candidates.find((c) => c.item.ref === chosen)?.item ?? null;
 };
@@ -4023,7 +4040,16 @@ var understand = (args, config, options) => {
   const names2 = rootNames(config);
   const withWord = options.withWord ?? parsed.withWord;
   const query2 = resolveIn(
-    { ...parsed, withWord, handlerWord: withWord, handlerExplicit: withWord !== null },
+    {
+      ...parsed,
+      withWord,
+      handlerWord: withWord,
+      handlerExplicit: withWord !== null,
+      // --reveal is the same instruction as the word "reveal", and it has to reach the handler
+      // rule, not just the action: a taught command handler executes what it is handed, and
+      // "show it in Finder" must never be the sentence that runs it.
+      reveal: parsed.reveal || options.reveal
+    },
     (word) => names2.has(word) || existsSync15(word),
     (word) => apps.apps.some((app) => app.name.toLowerCase().startsWith(word))
   );
@@ -4138,7 +4164,8 @@ var parseSetup = (args) => {
       options = { ...options, remove: [...options.remove, absolutize(next)] };
       i += 1;
     } else if (arg === "--depth" && next !== void 0) {
-      options = { ...options, depth: Number.parseInt(next, 10) };
+      const depth = Number.parseInt(next, 10);
+      options = Number.isFinite(depth) && depth > 0 ? { ...options, depth } : { ...options, error: `--depth wants a number, not "${next}"` };
       i += 1;
     } else options = { ...options, error: `unknown option ${String(arg)}` };
   }
@@ -4173,7 +4200,7 @@ var runSetup = (args) => {
   const options = parseSetup(args);
   if (options.error !== null) return fail(options.error), EXIT.error;
   const current2 = loadConfig();
-  const next = merged(current2.roots.length === 0 ? emptyConfig() : current2, options);
+  const next = merged(current2, options);
   if (next.roots.length === 0 && next.docRoots.length === 0) {
     return fail("found nothing to learn", "openit setup --root <path>"), EXIT.error;
   }
@@ -4551,7 +4578,7 @@ var runComplete = (args) => {
 // src/shell/zsh.ts
 var ZSH_INIT = `_openit() {
   local -a completions
-  completions=("\${(@f)$(openit complete -- "\${words[2,CURRENT]}" 2>/dev/null)}")
+  completions=("\${(@f)$(openit complete -- \${(@)words[2,CURRENT]} 2>/dev/null)}")
   compadd -- "\${completions[@]}"
 }
 compdef _openit openit`;
@@ -4559,7 +4586,11 @@ compdef _openit openit`;
 // src/shell/bash.ts
 var BASH_INIT = `_openit() {
   local IFS=$'\\n'
+  local had_noglob=0
+  case $- in *f*) had_noglob=1 ;; esac
+  set -f
   COMPREPLY=($(openit complete -- "\${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+  [ "$had_noglob" = 1 ] || set +f
 }
 complete -o default -F _openit openit`;
 

@@ -122,7 +122,10 @@ The rules, in short:
 - **The model can never cause code execution.** It may pick a document, a folder or a web page.
   Anything else it picks is refused rather than asked about.
 - **A terminal-class handler always needs a typed word**, and is refused outright over anything a
-  model picked.
+  model picked. `--reveal` does not get you out of that: "show it in Finder" is not a sentence
+  that runs anything, so it reveals the file and the taught command is not invoked.
+- **A directory can be an installer.** `.mpkg`, `.sparsebundle` and `.scptd` are folders on disk
+  and are judged by what opening them does, not by what `stat` says they are.
 
 ## What the model is told
 
@@ -162,7 +165,7 @@ that **nothing was launched**, and that is what the test suite asserts hardest.
 |---|---|
 | default | nothing - the action is the output |
 | `--dry-run` | one line: the exact POSIX-quoted argv that would run |
-| `plan -- <words>` | one JSON object, one line |
+| `plan -- <words>` | one JSON object, one line - a refusal describes itself but carries no command to run |
 | `which -- <words>` | one line: the resolved path or URL (withheld when refused) |
 | `complete` | newline-delimited completions |
 

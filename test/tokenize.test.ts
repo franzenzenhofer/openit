@@ -40,6 +40,23 @@ describe('the words a person types', () => {
   });
 });
 
+describe('the filler inside an operator phrase', () => {
+  it('reads "in the docs" as the place, not as the word "the"', () => {
+    expect(tokenize('notes in the docs')).toMatchObject({ inWord: 'docs', tokens: ['notes'] });
+  });
+
+  it('reads "with the sublime" as the handler, not as an app called "the"', () => {
+    expect(tokenize('notes with the sublime')).toMatchObject({ withWord: 'sublime' });
+  });
+
+  it('keeps a second operator as a word instead of eating what follows it', () => {
+    // "charts with preview with sublime" used to search for "charts" alone, silently losing
+    // both the second operator and the word after it.
+    expect(tokenize('charts with preview with sublime'))
+      .toMatchObject({ withWord: 'preview', tokens: ['charts', 'with', 'sublime'] });
+  });
+});
+
 describe('revealing rather than opening', () => {
   it('reads "in finder" as do not open it', () => {
     expect(tokenize('show report in finder')).toMatchObject({ reveal: true, tokens: ['report'] });

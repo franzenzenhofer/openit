@@ -2,7 +2,7 @@ import { confirm, hasTty } from '@franzenzenhofer/intent-core/picker';
 import { absolutize, contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { refreshIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
-import { DEFAULT_DEPTH, DEFAULT_IGNORE, emptyConfig, loadConfig, saveConfig, type Config } from '../config.js';
+import { DEFAULT_DEPTH, DEFAULT_IGNORE, loadConfig, saveConfig, type Config } from '../config.js';
 import { buildAppIndex, saveAppIndex } from '../store/apps.js';
 import { detectDocRoots, detectRoots } from './detect.js';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
@@ -38,7 +38,10 @@ export const parseSetup = (args: readonly string[]): SetupOptions => {
       options = { ...options, remove: [...options.remove, absolutize(next)] };
       i += 1;
     } else if (arg === '--depth' && next !== undefined) {
-      options = { ...options, depth: Number.parseInt(next, 10) };
+      const depth = Number.parseInt(next, 10);
+      options = Number.isFinite(depth) && depth > 0
+        ? { ...options, depth }
+        : { ...options, error: `--depth wants a number, not "${next}"` };
       i += 1;
     } else options = { ...options, error: `unknown option ${String(arg)}` };
   }
@@ -78,7 +81,9 @@ export const runSetup = (args: readonly string[]): ExitCode => {
   const options = parseSetup(args);
   if (options.error !== null) return fail(options.error), EXIT.error;
   const current = loadConfig();
-  const next = merged(current.roots.length === 0 ? emptyConfig() : current, options);
+  // Never from an empty config: `merged` already re-detects roots when there are none, and
+  // starting from scratch silently dropped taught handlers and re-armed the AI tier.
+  const next = merged(current, options);
   if (next.roots.length === 0 && next.docRoots.length === 0) {
     return fail('found nothing to learn', 'openit setup --root <path>'), EXIT.error;
   }

@@ -140,8 +140,11 @@ export const requiredConsent = (assessment: Assessment): Consent => {
   if (assessment.subject.kind === 'url' && assessment.subject.hasUserInfo) return 'refuse';
   const base = isCuratedApp(assessment) ? 'allow' : baseConsent(assessment);
   if (base === 'refuse') return 'refuse';
-  // Revealing a path shows it; it never opens it. A URL cannot be revealed, so it is unaffected.
-  if (assessment.reveal && assessment.subject.kind === 'path') return 'allow';
+  // Revealing a path shows it; it never opens it. A URL cannot be revealed, so it is
+  // unaffected - and neither is a handler that runs what it is given, because "show it in
+  // Finder" said nothing about running anything.
+  const executes = assessment.handler === 'terminal' || assessment.handlerFromAi;
+  if (assessment.reveal && assessment.subject.kind === 'path' && !executes) return 'allow';
   const level = byHandler(assessment, contextual(assessment, base));
   if (assessment.origin !== 'ai') return level;
   // A hard cap at `confirm`: the model may pick a document, a folder or a web page, and that

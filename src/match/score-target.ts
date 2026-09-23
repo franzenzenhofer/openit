@@ -72,6 +72,21 @@ const passesFilters = (query: ParsedQuery, target: Target): boolean => {
   return query.kinds.some((kind) => matchesKind(target.ref, kind));
 };
 
+/**
+ * One word that names an installed application names the application.
+ *
+ * "chrome" is a whole word of "Google Chrome" and "code" is a whole word of "Visual Studio
+ * Code"; nobody typing either of them alone means a folder that merely contains the letters.
+ * Lifting the match class, rather than adding a bonus, is what lets the decision rule call it
+ * an answer instead of one candidate among ten.
+ */
+const asNamedApp = (query: ParsedQuery, target: Target, quality: number): number => {
+  if (target.kind !== 'app' || query.tokens.length !== 1) return quality;
+  // Above `exact`, not merely at it: a bookmark whose host is literally "chrome" is an exact
+  // name too, and between the two an installed application is what "openit chrome" means.
+  return quality >= SCORE.wordBoundary ? SCORE.exact + BONUS.appExact : quality;
+};
+
 /** Multi token AND: every token must match somewhere, the mean match class is the base score. */
 export const matchQuality = (query: ParsedQuery, target: Target): number => {
   if (!passesFilters(query, target) || query.tokens.length === 0) return SCORE.none;
@@ -81,7 +96,7 @@ export const matchQuality = (query: ParsedQuery, target: Target): number => {
     if (single === SCORE.none) return SCORE.none;
     sum += single;
   }
-  return sum / query.tokens.length;
+  return asNamedApp(query, target, sum / query.tokens.length);
 };
 
 const brevityBonus = (query: ParsedQuery, target: Target): number => {
@@ -101,11 +116,6 @@ const kindBonus = (query: ParsedQuery, target: Target): number => {
   return query.kinds.some((kind) => matchesKind(target.ref, kind)) ? BONUS.kindMatch : 0;
 };
 
-const appBonus = (query: ParsedQuery, target: Target): number => {
-  if (target.kind !== 'app' || query.tokens.length !== 1) return 0;
-  return target.name.toLowerCase() === query.tokens[0] ? BONUS.appExact : 0;
-};
-
 export const contextualScore = (
   query: ParsedQuery,
   target: Target,
@@ -119,8 +129,7 @@ export const contextualScore = (
     + under
     + brevityBonus(query, target)
     + recencyBonus(target, context.nowMs)
-    + kindBonus(query, target)
-    + appBonus(query, target);
+    + kindBonus(query, target);
 };
 
 /** Relaxed match, used only to give the AI tier something to look at when nothing matched. */

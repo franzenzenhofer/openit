@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeFixture, quarantine, type Fixture } from './fixtures.js';
 import { classifyPath, extensionOf, readMagic } from '../src/risk/classify.js';
@@ -120,4 +121,23 @@ describe('verifyWord', () => {
     expect(verifyWord('script', '')).toBe('script');
     expect(verifyWord('document', 'shortcuts')).toBe('shortcuts');
   });
+
+describe('a directory that is not a folder', () => {
+  it('reads a .mpkg, a .sparsebundle and a .scptd as what they really are', () => {
+    // All three are directories on disk. Opening one mounts or installs or runs something,
+    // and reading the extension only for files let every one of them through as a folder.
+    for (const [name, klass] of [
+      ['Suite.mpkg', 'installer'],
+      ['Thing.sparsebundle', 'installer'],
+      ['Script.scptd', 'script'],
+    ] as const) {
+      mkdirSync(join(fixture.docs, name), { recursive: true });
+      expect(classifyPath(join(fixture.docs, name), [fixture.docs]).klass).toBe(klass);
+    }
+  });
+
+  it('still reads an ordinary folder as a folder', () => {
+    expect(classifyPath(fixture.root, [fixture.root]).klass).toBe('directory');
+  });
+});
 });

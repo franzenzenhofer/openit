@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeFixture, quarantine } from './fixtures.js';
 
 const fixture = makeFixture();
@@ -154,10 +154,51 @@ describe('nothing is launched before consent, and nothing at all when it is refu
     expect(run.stdout).toBe('');
   });
 
+  it('describes a refusal in `plan` without handing over a command to run', () => {
+    const run = openit(['plan', '--', 'javascript:alert(1)'], { OPENIT_OPEN_BIN: quietBin });
+    expect(run.status).toBe(5);
+    const parsed = JSON.parse(run.stdout) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ consent: 'refuse', command: null, argv: [] });
+    expect(existsSync(quietLog)).toBe(false);
+  });
+
   it('never emits -u file://, and never opens a javascript: link', () => {
     const run = openit(['--dry-run', 'javascript:alert(1)'], { OPENIT_OPEN_BIN: quietBin });
     expect(run.status).toBe(5);
     expect(existsSync(quietLog)).toBe(false);
+  });
+});
+
+describe('a taught command handler', () => {
+  const taught = mkdtempSync(join(tmpdir(), 'openit-taught-'));
+  const witness = join(taught, 'it-ran');
+  const notes = join(fixture.docs, 'taught-notes.txt');
+
+  beforeAll(() => {
+    writeFileSync(notes, 'hello\n');
+    writeFileSync(join(fixture.config, 'config.json'), JSON.stringify({
+      ...config,
+      handlers: [{ ext: 'txt', kind: '', app: '', command: '/usr/bin/touch', args: [witness, '{target}'] }],
+    }));
+  });
+
+  afterAll(() => {
+    writeFileSync(join(fixture.config, 'config.json'), JSON.stringify(config));
+  });
+
+  it('asks for a typed word, and runs nothing when there is nobody to ask', () => {
+    const run = openit([notes]);
+    expect(run.status).toBe(3);
+    expect(run.stderr).toContain('RUNS what you give it');
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('is not what "show it in Finder" runs', () => {
+    // The whole point of --reveal is that it launches nothing. It used to launch this.
+    const run = openit(['--reveal', notes]);
+    expect(run.status).toBe(0);
+    expect(existsSync(witness)).toBe(false);
+    expect(readFileSync(argvLog, 'utf8')).toContain('-R');
   });
 });
 

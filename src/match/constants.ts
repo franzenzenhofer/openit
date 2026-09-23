@@ -29,7 +29,10 @@ export const BONUS = {
   kindMatch: 60,
   /** openit's targets are documents, not projects, so recent beats old. */
   recency: 45,
-  /** The whole query is one word and it exactly names an installed app. */
+  /**
+   * How far above an exact name an installed application ranks when the whole query is one
+   * word. A launcher's whole job is that "chrome" means the browser.
+   */
   appExact: 80,
 } as const;
 
@@ -80,10 +83,15 @@ export const LIMIT = {
  * `in`, `with`, `show`, `folder`, `dir`, `new`, `last`, `latest`, `first`, `oldest` and `here`
  * all mean something to openit.
  */
+/**
+ * `openit` is deliberately NOT in here, though it is how every command starts. A directory on
+ * this machine is called openit, and a tool that cannot find the thing named after it is a
+ * tool with a hole in it. The doubled `openit openit readme` costs nothing: a stopword list
+ * that would erase the whole query erases nothing.
+ */
 export const STOPWORDS = new Set([
   'the', 'a', 'an', 'my', 'to', 'of', 'for', 'from',
-  'this', 'that', 'me', 'please', 'it', 'up',
-  'open', 'openit',
+  'this', 'that', 'me', 'please', 'it', 'up', 'open',
 ]);
 
 export const LATEST_WORDS = new Set(['latest', 'newest', 'last', 'recent']);

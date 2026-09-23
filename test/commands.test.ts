@@ -54,6 +54,22 @@ describe('setup', () => {
   it('refuses an option it does not know rather than ignoring it', () => {
     expect(openit('setup', '--recursive').status).toBe(1);
   });
+
+  it('refuses a depth that is not a number, rather than crawling nothing', () => {
+    const run = openit('setup', '--yes', '--root', fixture.root, '--depth', 'deep');
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('wants a number');
+  });
+
+  it('keeps what was already taught, and does not re-arm the AI tier behind you', () => {
+    openit('setup', '--yes', '--root', fixture.root, '--no-ai');
+    openit('handler', 'set', '--kind', 'pdf', '--app', 'Preview');
+    openit('setup', '--yes', '--root', fixture.root);
+    const after = config();
+    expect(after['handlers']).toHaveLength(1);
+    expect(after['ai']).toMatchObject({ enabled: false });
+    openit('handler', 'forget', '--kind', 'pdf');
+  });
 });
 
 describe('doctor', () => {

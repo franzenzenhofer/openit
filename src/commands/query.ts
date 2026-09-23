@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { pick, toItems } from '@franzenzenhofer/intent-core/picker';
+import { pick } from '@franzenzenhofer/intent-core/picker';
 import type { Scored } from '@franzenzenhofer/intent-core/match/decide';
 import { loadConfig, allRoots, type Config } from '../config.js';
 import { withoutSearching, type Shortcut } from '../match/shortcuts.js';
@@ -55,7 +55,11 @@ const suggest = (query: ParsedQuery, guesses: readonly Scored<Target>[], config:
 const chooseTarget = (decision: TargetDecision): Target | null => {
   if (decision.kind === 'hit') return decision.item;
   if (decision.kind !== 'choose') return null;
-  const chosen = pick(toItems(decision.candidates.map((c) => c.item.ref)));
+  // Through displayTarget, like every other line openit prints: this is the moment a person
+  // chooses which thing to open, so it is the last line a filename may lie on.
+  const chosen = pick(decision.candidates.map((scored) => ({
+    value: scored.item.ref, label: displayTarget(scored.item),
+  })));
   if (chosen === null) return null;
   return decision.candidates.find((c) => c.item.ref === chosen)?.item ?? null;
 };
@@ -113,7 +117,16 @@ const understand = (args: readonly string[], config: Config, options: QueryOptio
   const names = rootNames(config);
   const withWord = options.withWord ?? parsed.withWord;
   const query = resolveIn(
-    { ...parsed, withWord, handlerWord: withWord, handlerExplicit: withWord !== null },
+    {
+      ...parsed,
+      withWord,
+      handlerWord: withWord,
+      handlerExplicit: withWord !== null,
+      // --reveal is the same instruction as the word "reveal", and it has to reach the handler
+      // rule, not just the action: a taught command handler executes what it is handed, and
+      // "show it in Finder" must never be the sentence that runs it.
+      reveal: parsed.reveal || options.reveal,
+    },
     (word) => names.has(word) || existsSync(word),
     (word) => apps.apps.some((app) => app.name.toLowerCase().startsWith(word)),
   );

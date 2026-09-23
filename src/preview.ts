@@ -78,9 +78,16 @@ export const previewWhich = (input: PreviewInput): ExitCode => {
   return EXIT.ok;
 };
 
-/** The same decision as one JSON object, for anything that is not a person. */
-export const previewJson = (input: PreviewInput): void => {
+/**
+ * The same decision as one JSON object, for anything that is not a person.
+ *
+ * A refusal still describes itself - that is how a script learns what happened - but it does
+ * NOT carry a command and an argv. `plan` is the machine-facing mode, so it is the one most
+ * likely to be piped into something that runs what it finds there.
+ */
+export const previewJson = (input: PreviewInput): ExitCode => {
   const { plan, assessed } = input;
+  const refused = assessed.consent === 'refuse';
   emit(JSON.stringify({
     v: 1,
     target: {
@@ -97,7 +104,8 @@ export const previewJson = (input: PreviewInput): void => {
     score: Math.round(input.score),
     flags: flags(assessed),
     consent: assessed.consent,
-    command: plan.command,
-    argv: plan.argv,
+    command: refused ? null : plan.command,
+    argv: refused ? [] : plan.argv,
   }));
+  return refused ? EXIT.refused : EXIT.ok;
 };

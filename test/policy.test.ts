@@ -139,6 +139,13 @@ describe('named rules a human can read', () => {
     }
   });
 
+  it('never lets "show it in Finder" be the sentence that runs a taught command', () => {
+    const revealed = { reveal: true, handler: 'terminal' } as const;
+    expect(requiredConsent(at(revealed))).toBe('verify');
+    expect(requiredConsent(at({ ...revealed, origin: 'deterministic' }))).toBe('verify');
+    expect(requiredConsent(at({ ...revealed, origin: 'ai' }))).toBe('refuse');
+  });
+
   it('asks once more about a deterministically matched link than a typed one', () => {
     expect(requiredConsent(at({ subject: link('web'), origin: 'literal' }))).toBe('allow');
     expect(requiredConsent(at({ subject: link('web'), origin: 'deterministic' }))).toBe('confirm');
@@ -197,9 +204,13 @@ describe('invariants over the whole cross-product', () => {
     }
   });
 
-  it('INV-6 reveal always allows a path', () => {
+  it('INV-6 reveal allows a path, unless the handler is one that runs it', () => {
     for (const assessment of all) {
       if (!assessment.reveal || assessment.subject.kind !== 'path') continue;
+      // "Show it in Finder" is not a sentence that runs anything, so a handler that runs what
+      // it is given is not covered by the downgrade - it is the thing being refused.
+      const executes = assessment.handler === 'terminal' || assessment.handlerFromAi;
+      if (executes) continue;
       expect(requiredConsent(assessment)).toBe('allow');
     }
   });
