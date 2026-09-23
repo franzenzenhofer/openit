@@ -3,9 +3,10 @@ import { frecencyByKey, loadVisits } from '@franzenzenhofer/intent-core/store/vi
 import { stateFile } from '@franzenzenhofer/intent-core/paths';
 import type { Scored } from '@franzenzenhofer/intent-core/match/decide';
 import { decideTargets, rankTargets, type TargetDecision } from './match/resolve.js';
+import { dirCandidates } from './match/score-target.js';
 import { readings, type ParsedQuery } from './match/tokenize.js';
-import { LIMIT } from './match/constants.js';
 import { tier1, tier1b } from './sources.js';
+import { spotlightTargets } from './store/spotlight.js';
 import { isIdentity } from './identity.js';
 import { allRoots, type Config } from './config.js';
 import type { ScoreContext } from './match/score-target.js';
@@ -66,10 +67,6 @@ export const bestReading = (
   return fallback;
 };
 
-const bestDirs = (ranked: readonly Scored<Target>[]): string[] =>
-  ranked.filter((scored) => scored.item.kind === 'dir').slice(0, LIMIT.lazyParents)
-    .map((scored) => scored.item.ref);
-
 export interface Pool {
   readonly targets: Target[];
   readonly attempt: Attempt;
@@ -87,7 +84,7 @@ export const deterministicPool = (
 ): Pool => {
   const targets = [...tier1(config, freshIndex(config)).targets];
   let attempt = bestReading(query, targets, context);
-  const expanded = tier1b(config, bestDirs(attempt.ranked));
+  const expanded = tier1b(config, dirCandidates(attempt.query, targets));
   if (expanded.length === 0) return { targets, attempt };
   targets.push(...expanded);
   attempt = bestReading(query, targets, context);
@@ -99,6 +96,21 @@ export const rescan = (query: ParsedQuery, pool: Pool, config: Config, context: 
   const rescanned = tier1(config, refreshIndex(config)).targets;
   const lazy = pool.targets.filter((target) => target.source === 'lazy-child');
   const targets = [...rescanned, ...lazy];
+  return { targets, attempt: bestReading(query, targets, context) };
+};
+
+/**
+ * Tier 2. One mdfind per indexed root, entered only because the cached tiers were unsure -
+ * it is the only tier that can see a file openit was never told to index.
+ */
+export const spotlightPool = (
+  query: ParsedQuery,
+  pool: Pool,
+  context: QueryContext,
+): Pool => {
+  const found = spotlightTargets([...query.tokens, ...query.years], context.roots);
+  if (found.length === 0) return pool;
+  const targets = [...pool.targets, ...found];
   return { targets, attempt: bestReading(query, targets, context) };
 };
 

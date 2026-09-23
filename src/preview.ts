@@ -1,6 +1,7 @@
 import { emit, note } from '@franzenzenhofer/intent-core/protocol';
 import { EXIT, fail, type ExitCode } from './protocol.js';
 import { displayTarget } from './display.js';
+import { handlerLabel } from './handler.js';
 import { classDescription } from './risk/verify-word.js';
 import type { Assessed } from './risk/assess.js';
 import type { Plan } from './action.js';
@@ -39,7 +40,8 @@ export const preview = (input: PreviewInput): void => {
   note(`openit: ${verb} ${displayTarget(plan.action.target)}`);
   if (assessed.facts !== null) line('kind', classDescription(assessed.facts.klass));
   if (assessed.url !== null) line('kind', `${assessed.url.scheme} link`);
-  line('handler', plan.label === '' ? 'the system default' : plan.label);
+  const who = handlerLabel(plan.action.handler);
+  line('handler', who === '' ? 'the system default (whatever a double click would do)' : who);
   line('origin', `${input.origin} match, score ${String(Math.round(input.score))}`);
   const found = flags(assessed);
   if (found.length > 0) line('flags', found.join(', '));
@@ -78,7 +80,7 @@ export const previewJson = (input: PreviewInput): void => {
     },
     class: assessed.facts?.klass ?? null,
     scheme: assessed.url?.scheme ?? null,
-    handler: { kind: plan.action.handler.kind, label: plan.label },
+    handler: { kind: plan.action.handler.kind, label: handlerLabel(plan.action.handler) },
     origin: input.origin,
     score: Math.round(input.score),
     flags: flags(assessed),

@@ -4,6 +4,7 @@ import { classDescription } from './risk/verify-word.js';
 import { verifyWord } from './risk/verify-word.js';
 import type { Assessed } from './risk/assess.js';
 import { displayTarget } from './display.js';
+import { handlerLabel } from './handler.js';
 import type { Plan } from './action.js';
 
 const line = (text: string): void => note(`openit:   ${text}`);
@@ -21,7 +22,7 @@ const describe = (assessed: Assessed, plan: Plan): void => {
   if (assessed.facts?.escapesRoots === true && assessed.facts.isSymlink) {
     line(`it is a link to ${assessed.facts.realPath}`);
   }
-  if (plan.action.handler.kind !== 'default') line(`handler ${plan.label}`);
+  if (plan.action.handler.kind !== 'default') line(`it will be opened with ${handlerLabel(plan.action.handler)}`);
 };
 
 /**

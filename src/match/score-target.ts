@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { frecencyBonus, looseScore, matchName } from '@franzenzenhofer/intent-core/match/score';
 import { BONUS, LIMIT, MATCH, SCORE } from './constants.js';
 import { matchesKind } from './kinds.js';
@@ -6,6 +7,13 @@ import type { Target } from '../target.js';
 
 const DAY_MS = 86_400_000;
 const RECENCY_HALF_LIFE_DAYS = 30;
+/**
+ * What a token is worth when it names the folder a file sits in rather than the file. "the cdai
+ * readme" is two different kinds of word - one names the place, one names the thing - and if
+ * the place only ever scored a flat path-substring the pair could never add up to an outright
+ * answer.
+ */
+const PARENT_SHARE = 0.6;
 
 export interface ScoreContext {
   readonly cwd: string;
@@ -21,9 +29,31 @@ const parentPath = (path: string): string => {
 const tokenScore = (token: string, target: Target): number => {
   const nameScore = matchName(token, target.name, MATCH);
   if (nameScore > SCORE.none) return nameScore;
-  if (target.kind === 'url') return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
-  return parentPath(target.ref).toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
+  if (target.kind === 'url') {
+    return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
+  }
+  const parent = parentPath(target.ref);
+  const parentScore = matchName(token, basename(parent), MATCH);
+  if (parentScore > SCORE.none) return Math.max(SCORE.pathOnly, Math.round(parentScore * PARENT_SHARE));
+  return parent.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
+
+/**
+ * Directories worth listing the children of. Deliberately relaxed to ONE matching token: in
+ * "the cdai readme" the directory is named by half the query, and the strict all-tokens rule
+ * that ranks the final answer would drop it before its children were ever seen.
+ */
+export const dirCandidates = (query: ParsedQuery, targets: readonly Target[]): string[] =>
+  targets
+    .filter((target) => target.kind === 'dir')
+    .map((target) => ({
+      ref: target.ref,
+      score: Math.max(...query.tokens.map((token) => matchName(token, target.name, MATCH))),
+    }))
+    .filter((scored) => scored.score >= SCORE.wordBoundary)
+    .sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref))
+    .slice(0, LIMIT.lazyParents)
+    .map((scored) => scored.ref);
 
 const passesFilters = (query: ParsedQuery, target: Target): boolean => {
   const lower = target.ref.toLowerCase();

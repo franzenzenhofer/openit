@@ -5,8 +5,9 @@ import { loadVisits } from '@franzenzenhofer/intent-core/store/visits';
 import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
 import { hasTty } from '@franzenzenhofer/intent-core/picker';
-import { loadConfig } from '../config.js';
+import { allRoots, loadConfig } from '../config.js';
 import { loadAppIndex } from '../store/apps.js';
+import { spotlightCoverage } from '../store/spotlight.js';
 import { docTargets } from '../store/docs.js';
 import { isOverridden, resolveOpenBin, SYSTEM_OPEN } from '../act/open-bin.js';
 import { isIdentity } from '../identity.js';
@@ -37,6 +38,9 @@ export const runDoctor = (): ExitCode => {
   say('index', `${String(index.entries.length)} directories${index.truncated === null ? '' : ` (truncated: ${index.truncated})`}`);
   say('files', String(docTargets(config.docRoots, config.ignore).length));
   say('apps', String(loadAppIndex().apps.length));
+  for (const one of spotlightCoverage(allRoots(config))) {
+    say('spotlight', `${contractTilde(one.root)} ${one.indexed ? 'indexed' : 'NOT indexed - openit cannot search it beyond its own index'}`);
+  }
   const db = loadVisits({ file: () => stateFile('db.json'), isIdentity });
   say('history', `${String(db.records.length)} remembered opens`);
   const backend = config.ai.enabled ? resolveAiBackend(config.ai) : null;

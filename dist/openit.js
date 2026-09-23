@@ -278,7 +278,7 @@ var parseArgs = (args) => {
 };
 
 // src/commands/query.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 
 // node_modules/@franzenzenhofer/intent-core/dist/picker.js
 import { spawnSync } from "node:child_process";
@@ -1800,8 +1800,10 @@ var dropDescendants = (ranked, pathOf2) => {
 };
 
 // src/match/score-target.ts
+import { basename as basename5 } from "node:path";
 var DAY_MS = 864e5;
 var RECENCY_HALF_LIFE_DAYS = 30;
+var PARENT_SHARE = 0.6;
 var parentPath = (path) => {
   const idx = path.lastIndexOf("/");
   return idx <= 0 ? "" : path.slice(0, idx);
@@ -1809,9 +1811,18 @@ var parentPath = (path) => {
 var tokenScore = (token, target) => {
   const nameScore = matchName(token, target.name, MATCH);
   if (nameScore > SCORE.none) return nameScore;
-  if (target.kind === "url") return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
-  return parentPath(target.ref).toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
+  if (target.kind === "url") {
+    return target.ref.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
+  }
+  const parent = parentPath(target.ref);
+  const parentScore = matchName(token, basename5(parent), MATCH);
+  if (parentScore > SCORE.none) return Math.max(SCORE.pathOnly, Math.round(parentScore * PARENT_SHARE));
+  return parent.toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
+var dirCandidates = (query, targets) => targets.filter((target) => target.kind === "dir").map((target) => ({
+  ref: target.ref,
+  score: Math.max(...query.tokens.map((token) => matchName(token, target.name, MATCH)))
+})).filter((scored) => scored.score >= SCORE.wordBoundary).sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref)).slice(0, LIMIT.lazyParents).map((scored) => scored.ref);
 var passesFilters = (query, target) => {
   const lower = target.ref.toLowerCase();
   if (query.targetKinds.length > 0 && !query.targetKinds.includes(target.kind)) return false;
@@ -1883,6 +1894,118 @@ var applyOrder = (query, ranked) => {
 };
 var decideTargets = (query, ranked) => query.order === "none" ? decide(ranked, THRESHOLD) : applyOrder(query, ranked);
 
+// src/store/spotlight.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { existsSync as existsSync9, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { basename as basename6 } from "node:path";
+var MDFIND = "/usr/bin/mdfind";
+var PROBE_FILE = "spotlight.json";
+var PROBE_TTL_MS = 24 * 60 * 60 * 1e3;
+var QUERY_TIMEOUT_MS = 1500;
+var PROBE_TIMEOUT_MS = 2e3;
+var MAX_BUFFER = 8 * 1024 * 1024;
+var MIN_TOKEN = 2;
+var MAX_TOKEN = 64;
+var PROBE_NAMES = 3;
+var quoteQueryValue = (value) => value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+var usable = (token) => token.length >= MIN_TOKEN && token.length <= MAX_TOKEN && !/[\p{Cc}\p{Cf}]/u.test(token);
+var buildQuery = (tokens) => {
+  const clauses = tokens.filter(usable).map((token) => `(kMDItemFSName == "*${quoteQueryValue(token)}*"cd)`);
+  return clauses.length === 0 ? null : clauses.join(" && ");
+};
+var runMdfind = (args, timeoutMs) => {
+  if (!existsSync9(MDFIND)) return null;
+  const result = spawnSync2(MDFIND, args, {
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer: MAX_BUFFER
+  });
+  if (result.status !== 0 || typeof result.stdout !== "string") return null;
+  return result.stdout;
+};
+var probeRoot = (root) => {
+  let names;
+  try {
+    names = readdirSync6(root);
+  } catch {
+    return false;
+  }
+  const candidates = names.filter((name) => !name.startsWith(".") && !/[\p{Cc}]/u.test(name)).slice(0, PROBE_NAMES);
+  return candidates.some((name) => {
+    const out = runMdfind(
+      ["-onlyin", root, "-count", `kMDItemFSName == "${quoteQueryValue(name)}"`],
+      PROBE_TIMEOUT_MS
+    );
+    return out !== null && Number.parseInt(out.trim(), 10) > 0;
+  });
+};
+var VERSION2 = 1;
+var readCache = (now) => {
+  const parsed = tryReadJson(stateFile(PROBE_FILE));
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    const record = parsed;
+    const generatedAt = typeof record["generatedAt"] === "number" ? record["generatedAt"] : 0;
+    const roots = record["roots"];
+    if (record["version"] === VERSION2 && now - generatedAt <= PROBE_TTL_MS && typeof roots === "object" && roots !== null) {
+      return { version: VERSION2, generatedAt, roots };
+    }
+  }
+  return { version: VERSION2, generatedAt: now, roots: {} };
+};
+var spotlightCoverage = (roots, now = Date.now()) => {
+  const cache = readCache(now);
+  const known2 = { ...cache.roots };
+  let learned = false;
+  for (const root of roots) {
+    if (typeof known2[root] === "boolean") continue;
+    known2[root] = probeRoot(root);
+    learned = true;
+  }
+  if (learned) {
+    try {
+      writeAtomic(
+        stateFile(PROBE_FILE),
+        `${JSON.stringify({ version: VERSION2, generatedAt: cache.generatedAt, roots: known2 })}
+`
+      );
+    } catch {
+    }
+  }
+  return roots.map((root) => ({ root, indexed: known2[root] === true }));
+};
+var indexedRoots = (roots, now = Date.now()) => spotlightCoverage(roots, now).filter((one) => one.indexed).map((one) => one.root);
+var targetOf = (path) => {
+  try {
+    const stats = statSync9(path);
+    return {
+      kind: stats.isDirectory() ? /\.app$/iu.test(path) ? "app" : "dir" : "file",
+      ref: path,
+      name: basename6(path),
+      mtime: stats.mtimeMs,
+      source: "spotlight"
+    };
+  } catch {
+    return null;
+  }
+};
+var spotlightTargets = (tokens, roots, now = Date.now()) => {
+  const query = buildQuery(tokens);
+  if (query === null) return [];
+  const found = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const root of indexedRoots(roots, now)) {
+    const out = runMdfind(["-onlyin", root, query], QUERY_TIMEOUT_MS);
+    if (out === null) continue;
+    for (const line3 of out.split("\n")) {
+      if (line3 === "" || seen.has(line3) || found.length >= LIMIT.spotlight) continue;
+      seen.add(line3);
+      const target = targetOf(line3);
+      if (target !== null) found.push(target);
+    }
+  }
+  return found;
+};
+
 // src/identity.ts
 import { isAbsolute as isAbsolute5 } from "node:path";
 var MAX_URL = 2048;
@@ -1917,11 +2040,10 @@ var bestReading = (query, targets, context) => {
   }
   return fallback;
 };
-var bestDirs = (ranked) => ranked.filter((scored) => scored.item.kind === "dir").slice(0, LIMIT.lazyParents).map((scored) => scored.item.ref);
 var deterministicPool = (query, config, context) => {
   const targets = [...tier1(config, freshIndex(config)).targets];
   let attempt = bestReading(query, targets, context);
-  const expanded = tier1b(config, bestDirs(attempt.ranked));
+  const expanded = tier1b(config, dirCandidates(attempt.query, targets));
   if (expanded.length === 0) return { targets, attempt };
   targets.push(...expanded);
   attempt = bestReading(query, targets, context);
@@ -1931,6 +2053,12 @@ var rescan = (query, pool, config, context) => {
   const rescanned = tier1(config, refreshIndex(config)).targets;
   const lazy = pool.targets.filter((target) => target.source === "lazy-child");
   const targets = [...rescanned, ...lazy];
+  return { targets, attempt: bestReading(query, targets, context) };
+};
+var spotlightPool = (query, pool, context) => {
+  const found = spotlightTargets([...query.tokens, ...query.years], context.roots);
+  if (found.length === 0) return pool;
+  const targets = [...pool.targets, ...found];
   return { targets, attempt: bestReading(query, targets, context) };
 };
 var decideFrom = (attempt) => decideTargets(attempt.query, attempt.ranked);
@@ -2078,7 +2206,7 @@ var describe = (assessed, plan) => {
   if (assessed.facts?.escapesRoots === true && assessed.facts.isSymlink) {
     line(`it is a link to ${assessed.facts.realPath}`);
   }
-  if (plan.action.handler.kind !== "default") line(`handler ${plan.label}`);
+  if (plan.action.handler.kind !== "default") line(`it will be opened with ${handlerLabel(plan.action.handler)}`);
 };
 var granted = (assessed, plan) => {
   if (assessed.consent === "allow") return true;
@@ -2093,11 +2221,11 @@ var granted = (assessed, plan) => {
 };
 
 // src/risk/bundle.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { join as join7 } from "node:path";
 var PLUTIL = "/usr/bin/plutil";
 var TIMEOUT_MS = 3e3;
-var MAX_BUFFER = 1024 * 1024;
+var MAX_BUFFER2 = 1024 * 1024;
 var TERMINAL_IDS = /* @__PURE__ */ new Set([
   "com.apple.terminal",
   "com.googlecode.iterm2",
@@ -2136,15 +2264,37 @@ var EDITOR_IDS = /* @__PURE__ */ new Set([
   "com.panic.nova"
 ]);
 var VIEWER_IDS = /* @__PURE__ */ new Set(["com.apple.preview", "com.apple.quicktimeplayerx", "org.videolan.vlc"]);
-var EXECUTABLE_TYPES = ["public.unix-executable", "public.shell-script", "public.executable"];
-var declaredTypes = (appPath) => {
+var SHELL_ROLE = "shell";
+var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var hasShellRole = (info) => {
+  const types = info["CFBundleDocumentTypes"];
+  if (!Array.isArray(types)) return false;
+  return types.some((entry) => {
+    if (!isRecord7(entry)) return false;
+    const role = entry["CFBundleTypeRole"];
+    return typeof role === "string" && role.toLowerCase() === SHELL_ROLE;
+  });
+};
+var readInfo = (appPath) => {
   const plist = join7(appPath, "Contents", "Info.plist");
-  const result = spawnSync2(PLUTIL, ["-convert", "json", "-o", "-", "--", plist], {
+  const result = spawnSync3(PLUTIL, ["-convert", "json", "-o", "-", "--", plist], {
     encoding: "utf8",
     timeout: TIMEOUT_MS,
-    maxBuffer: MAX_BUFFER
+    maxBuffer: MAX_BUFFER2
   });
-  return result.status === 0 && typeof result.stdout === "string" ? result.stdout : "";
+  if (result.status !== 0 || typeof result.stdout !== "string") return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (!isRecord7(parsed)) return null;
+  const id = parsed["CFBundleIdentifier"];
+  return {
+    id: typeof id === "string" ? id : "",
+    runsWhatItOpens: hasShellRole(parsed)
+  };
 };
 var known = (id) => {
   if (TERMINAL_IDS.has(id)) return "terminal";
@@ -2154,17 +2304,17 @@ var known = (id) => {
   return VIEWER_IDS.has(id) ? "viewer" : null;
 };
 var handlerKind = (appPath, bundleId) => {
-  const id = (bundleId ?? "").toLowerCase();
+  const info = appPath === "" ? null : readInfo(appPath);
+  const id = (bundleId ?? info?.id ?? "").toLowerCase();
   const listed = id === "" ? null : known(id);
   if (listed !== null) return listed;
-  if (appPath === "") return "unknown";
-  const types = declaredTypes(appPath);
-  return EXECUTABLE_TYPES.some((type) => types.includes(type)) ? "terminal" : "unknown";
+  if (info === null) return "unknown";
+  return info.runsWhatItOpens ? "terminal" : "unknown";
 };
 
 // src/risk/classify.ts
-import { closeSync as closeSync2, lstatSync as lstatSync2, openSync as openSync2, readSync as readSync2, statSync as statSync9 } from "node:fs";
-import { basename as basename5, extname as extname2, join as join8 } from "node:path";
+import { closeSync as closeSync2, lstatSync as lstatSync2, openSync as openSync2, readSync as readSync2, statSync as statSync10 } from "node:fs";
+import { basename as basename7, extname as extname2, join as join8 } from "node:path";
 
 // src/risk/classes.ts
 var BUNDLE_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -2324,7 +2474,7 @@ var BOOT_PREFIXES = ["/Volumes/"];
 var MAGIC_BYTES = 4;
 var SHEBANG = 8993;
 var ZIP = 1347093252;
-var extensionOf = (path) => extname2(basename5(path)).replace(/^\./u, "").toLowerCase();
+var extensionOf = (path) => extname2(basename7(path)).replace(/^\./u, "").toLowerCase();
 var readMagic = (path) => {
   let fd;
   try {
@@ -2344,7 +2494,7 @@ var readMagic = (path) => {
 var directoryClass = (path) => {
   const extension = extensionOf(path);
   try {
-    if (statSync9(join8(path, "Contents", "MacOS")).isDirectory()) return "application";
+    if (statSync10(join8(path, "Contents", "MacOS")).isDirectory()) return "application";
   } catch {
   }
   if (extension === "app") return "application";
@@ -2389,7 +2539,7 @@ var classifyPath = (path, roots) => {
   const realPath = realPathOr(path);
   let stats;
   try {
-    stats = statSync9(path);
+    stats = statSync10(path);
   } catch {
     return { ...missing(path), isSymlink: link.isSymbolicLink() };
   }
@@ -2409,16 +2559,16 @@ var classifyPath = (path, roots) => {
 };
 
 // src/risk/locator.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 var PLUTIL2 = "/usr/bin/plutil";
 var TIMEOUT_MS2 = 2e3;
-var MAX_BUFFER2 = 64 * 1024;
+var MAX_BUFFER3 = 64 * 1024;
 var MAX_URL2 = 2048;
 var locatorUrl = (path) => {
-  const result = spawnSync3(PLUTIL2, ["-extract", "URL", "raw", "-o", "-", "--", path], {
+  const result = spawnSync4(PLUTIL2, ["-extract", "URL", "raw", "-o", "-", "--", path], {
     encoding: "utf8",
     timeout: TIMEOUT_MS2,
-    maxBuffer: MAX_BUFFER2
+    maxBuffer: MAX_BUFFER3
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   const url = result.stdout.trim();
@@ -2487,11 +2637,11 @@ var requiredConsent = (assessment) => {
 var consentRank = index;
 
 // src/risk/quarantine.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
+import { spawnSync as spawnSync5 } from "node:child_process";
 var XATTR = "/usr/bin/xattr";
 var ATTRIBUTE = "com.apple.quarantine";
 var TIMEOUT_MS3 = 2e3;
-var MAX_BUFFER3 = 8192;
+var MAX_BUFFER4 = 8192;
 var USER_APPROVED = 64;
 var parseQuarantine = (raw) => {
   const trimmed = raw.trim();
@@ -2509,10 +2659,10 @@ var parseQuarantine = (raw) => {
   };
 };
 var readQuarantine = (path) => {
-  const result = spawnSync4(XATTR, ["-p", ATTRIBUTE, "--", path], {
+  const result = spawnSync5(XATTR, ["-p", ATTRIBUTE, "--", path], {
     encoding: "utf8",
     timeout: TIMEOUT_MS3,
-    maxBuffer: MAX_BUFFER3
+    maxBuffer: MAX_BUFFER4
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   return parseQuarantine(result.stdout);
@@ -2819,7 +2969,8 @@ var preview = (input) => {
   note(`openit: ${verb} ${displayTarget(plan.action.target)}`);
   if (assessed.facts !== null) line2("kind", classDescription(assessed.facts.klass));
   if (assessed.url !== null) line2("kind", `${assessed.url.scheme} link`);
-  line2("handler", plan.label === "" ? "the system default" : plan.label);
+  const who = handlerLabel(plan.action.handler);
+  line2("handler", who === "" ? "the system default (whatever a double click would do)" : who);
   line2("origin", `${input.origin} match, score ${String(Math.round(input.score))}`);
   const found = flags2(assessed);
   if (found.length > 0) line2("flags", found.join(", "));
@@ -2850,7 +3001,7 @@ var previewJson = (input) => {
     },
     class: assessed.facts?.klass ?? null,
     scheme: assessed.url?.scheme ?? null,
-    handler: { kind: plan.action.handler.kind, label: plan.label },
+    handler: { kind: plan.action.handler.kind, label: handlerLabel(plan.action.handler) },
     origin: input.origin,
     score: Math.round(input.score),
     flags: flags2(assessed),
@@ -2956,6 +3107,10 @@ var resolve4 = (query, config, context) => {
     pool = rescan(query, pool, config, context);
     decision = decideFrom(pool.attempt);
   }
+  if (decision.kind === "unsure") {
+    pool = spotlightPool(query, pool, context);
+    decision = decideFrom(pool.attempt);
+  }
   if (decision.kind !== "unsure") return answered(decision);
   return { kind: "none", guesses: pool.attempt.ranked };
 };
@@ -2966,7 +3121,7 @@ var understand = (args, config, options) => {
   const withWord = options.withWord ?? parsed.withWord;
   const query = resolveIn(
     { ...parsed, withWord, handlerWord: withWord, handlerExplicit: withWord !== null },
-    (word) => names.has(word) || existsSync9(word),
+    (word) => names.has(word) || existsSync10(word),
     (word) => apps.apps.some((app) => app.name.toLowerCase().startsWith(word))
   );
   const handler = resolveHandler({ query, apps: apps.apps, rules: config.handlers });
@@ -3003,11 +3158,11 @@ var runQuery = async (args, options) => {
 };
 
 // node_modules/@franzenzenhofer/intent-core/dist/ai/backend.js
-import { basename as basename6 } from "node:path";
+import { basename as basename8 } from "node:path";
 var AUTO_COMMANDS = ["apfel", "claude", "gemini"];
 var DEFAULT_MODEL = { claude: "sonnet" };
 var backendKind = (command) => {
-  const name = basename6(command).toLowerCase();
+  const name = basename8(command).toLowerCase();
   if (name === "apfel")
     return "apfel";
   if (name === "claude")
@@ -3052,7 +3207,7 @@ var resolveAiBackend = (ai, resolveCommand = resolveExecutable) => {
 var backendLabel = (target) => target.model === "" ? target.kind : `${target.kind} ${target.model}`;
 
 // src/commands/detect.ts
-import { existsSync as existsSync10, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync11, readdirSync as readdirSync7, statSync as statSync11 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join9 } from "node:path";
 var PROJECT_DIRS = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
@@ -3062,19 +3217,29 @@ var DOC_DIRS = [
   ["Documents", 2],
   [join9("Pictures", "Screenshots"), 1]
 ];
-var CLOUD_HINTS = ["Dropbox", "Library/CloudStorage", "iCloud Drive"];
+var CLOUD_PATTERN = /dropbox|onedrive|nextcloud|owncloud|drive|icloud/iu;
+var CLOUD_PATHS = [join9("Library", "CloudStorage")];
 var isDir = (path) => {
   try {
-    return existsSync10(path) && statSync10(path).isDirectory();
+    return existsSync11(path) && statSync11(path).isDirectory();
   } catch {
     return false;
   }
 };
+var cloudDirs = (home) => {
+  let names = [];
+  try {
+    names = readdirSync7(home);
+  } catch {
+    return [];
+  }
+  const matched = names.filter((name) => !name.startsWith(".") && CLOUD_PATTERN.test(name)).map((name) => join9(home, name));
+  return [...matched, ...CLOUD_PATHS.map((name) => join9(home, name))].filter(isDir);
+};
 var detectRoots = () => {
   const home = homedir3();
   const found = PROJECT_DIRS.map((name) => join9(home, name)).filter(isDir);
-  const cloud = CLOUD_HINTS.map((name) => join9(home, name)).filter(isDir);
-  return [...found, ...cloud].map((path) => ({ path, depth: DEFAULT_DEPTH }));
+  return [...found, ...cloudDirs(home)].map((path) => ({ path, depth: DEFAULT_DEPTH }));
 };
 var detectDocRoots = () => {
   const home = homedir3();
@@ -3161,7 +3326,7 @@ var runSetup = (args) => {
 };
 
 // src/commands/doctor.ts
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync12 } from "node:fs";
 var say = (label, value) => note(`  ${label.padEnd(12)} ${value}`);
 var opener = () => {
   const bin = resolveOpenBin();
@@ -3175,7 +3340,7 @@ var runDoctor = () => {
   const config = loadConfig();
   note("openit doctor");
   say("node", process.version);
-  say("config", `${contractTilde(configFile())}${existsSync11(configFile()) ? "" : " (not written yet)"}`);
+  say("config", `${contractTilde(configFile())}${existsSync12(configFile()) ? "" : " (not written yet)"}`);
   say("data", contractTilde(dataDir()));
   say("private", hasPrivateMode(dataDir(), true) ? "yes (0700)" : "no - run any openit command to tighten");
   opener();
@@ -3185,6 +3350,9 @@ var runDoctor = () => {
   say("index", `${String(index2.entries.length)} directories${index2.truncated === null ? "" : ` (truncated: ${index2.truncated})`}`);
   say("files", String(docTargets(config.docRoots, config.ignore).length));
   say("apps", String(loadAppIndex().apps.length));
+  for (const one of spotlightCoverage(allRoots(config))) {
+    say("spotlight", `${contractTilde(one.root)} ${one.indexed ? "indexed" : "NOT indexed - openit cannot search it beyond its own index"}`);
+  }
   const db = loadVisits({ file: () => stateFile("db.json"), isIdentity });
   say("history", `${String(db.records.length)} remembered opens`);
   const backend2 = config.ai.enabled ? resolveAiBackend(config.ai) : null;
@@ -3214,7 +3382,7 @@ var runIndex = (args) => {
 
 // src/cli.ts
 setProduct({ name: "openit", envPrefix: "OPENIT" });
-var VERSION2 = `openit ${package_default.version}`;
+var VERSION3 = `openit ${package_default.version}`;
 var USAGE = `openit - say what to open, it works out what and with what, then opens it
 
 openit <words>                open the thing you mean
@@ -3247,7 +3415,7 @@ var dispatch = async (args) => {
     return command === void 0 ? EXIT.error : EXIT.ok;
   }
   if (command === "--version" || command === "-v") {
-    note(VERSION2);
+    note(VERSION3);
     return EXIT.ok;
   }
   if (command === "setup") return runSetup(args.slice(1));

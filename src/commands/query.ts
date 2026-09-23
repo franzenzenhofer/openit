@@ -8,7 +8,8 @@ import { resolveIn, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js'
 import { LIMIT, LITERAL_SCORE } from '../match/constants.js';
 import { rootNames, tier1 } from '../sources.js';
 import {
-  decideFrom, deterministicPool, rescan, scoreContext, type QueryContext, type Resolution,
+  decideFrom, deterministicPool, rescan, scoreContext, spotlightPool,
+  type QueryContext, type Resolution,
 } from '../pipeline.js';
 import { EXIT, fail, type ExitCode } from '../protocol.js';
 import { displayTarget } from '../display.js';
@@ -74,6 +75,10 @@ const resolve = (query: ParsedQuery, config: Config, context: QueryContext): Res
   if (decision.kind === 'unsure') {
     // Nothing answered, so the one thing that can change the answer is data openit lacks.
     pool = rescan(query, pool, config, context);
+    decision = decideFrom(pool.attempt);
+  }
+  if (decision.kind === 'unsure') {
+    pool = spotlightPool(query, pool, context);
     decision = decideFrom(pool.attempt);
   }
   if (decision.kind !== 'unsure') return answered(decision);
